@@ -6,6 +6,7 @@ import { CHART_SPECS } from '@/lib/chartSpec';
 import { usePrefs } from '@/lib/prefs';
 import { dateLabel, relativeFromNow } from '@/lib/format';
 import { RefreshButton } from './RefreshButton';
+import { NgLoginsSection } from './NgLoginsSection';
 
 interface ServerSettings {
   schedulerEnabled: boolean;
@@ -233,6 +234,9 @@ export function SettingsView() {
           )}
         </div>
       </section>
+
+      {/* National Grid logins */}
+      <NgLoginsSection />
 
       {/* Recent runs */}
       <section className="card">

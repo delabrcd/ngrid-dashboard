@@ -105,7 +105,9 @@ async function firstVisible(page: Page, selectors: string[], timeout = 15000): P
 }
 
 // Detect an MFA/OTP step so we can fail with a clear message instead of hanging.
-async function looksLikeMfa(page: Page): Promise<boolean> {
+// Exported for the interactive pre-flight login (step 3), which PAUSES here for
+// an operator-supplied code instead of throwing.
+export async function looksLikeMfa(page: Page): Promise<boolean> {
   const txt = (await page.evaluate(() => document.body.innerText).catch(() => '')) as string;
   return /one[\s-]?time|verification code|enter the code|passcode|authenticator/i.test(txt);
 }
@@ -163,6 +165,122 @@ async function login(page: Page, user: string, pass: string, log: (m: string) =>
     const bodyText = (await page.evaluate(() => document.body.innerText).catch(() => '')) as string;
     throw new Error('Login failed (still on the login host). Check credentials. Page said: ' + bodyText.slice(0, 300));
   }
+  return url;
+}
+
+// ---- interactive (operator-attended) login ------------------------------
+// Step 3: the in-app NG-login pre-flight. Unlike the unattended `login()` above
+// (which THROWS at MFA so scheduled scrapes fail cleanly), this variant PAUSES
+// at the OTP step and asks the caller for a one-time code, then resumes the same
+// live page. It deliberately reuses the same selectors as `login()` so the two
+// paths stay in lockstep when the portal changes. Used only by the pre-flight
+// registry (preflight.ts); the scheduled path is untouched.
+
+const OTP_INPUT_SELECTORS = [
+  '#otpCode',
+  '#oneTimeCode',
+  '#verificationCode',
+  'input[name="otpCode"]',
+  'input[autocomplete="one-time-code"]',
+  'input[name="code"]',
+  'input[type="tel"]',
+];
+const OTP_SUBMIT_SELECTORS = ['#interceptButton', '#continue', '#verifyCode', 'button[type="submit"]', 'input[type="submit"]'];
+
+export interface InteractiveLoginHooks {
+  // Called when the portal presents the OTP step. Resolves with the operator's
+  // one-time code (already validated/normalized by the caller). The code is used
+  // once and never stored or logged.
+  onOtpNeeded: () => Promise<string>;
+}
+
+// Fill email + password and submit, exactly as `login()` does. Shared so the
+// interactive path can't drift from the unattended one. Returns once the submit
+// click has fired and the page has had a moment to settle.
+async function fillCredentials(page: Page, user: string, pass: string, log: (m: string) => void): Promise<void> {
+  log('opening myaccount.nationalgrid.com');
+  await page.goto('https://myaccount.nationalgrid.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForURL(/login\.nationalgrid\.com|b2clogin\.com/, { timeout: 60000 }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+  const emailSel = await firstVisible(page, ['#signInName', '#email', 'input[type="email"]', 'input[name="email"]']);
+  if (!emailSel) throw new Error('Could not find the email field on the login page');
+  await page.fill(emailSel, user);
+
+  let passSel = await firstVisible(page, ['#password', 'input[type="password"]'], 3000);
+  if (!passSel) {
+    const nextSel = await firstVisible(page, ['#interceptButton', '#next', '#continue', 'button[type="submit"]'], 3000);
+    if (nextSel) {
+      await page.click(nextSel);
+      await page.waitForTimeout(2000);
+    }
+    passSel = await firstVisible(page, ['#password', 'input[type="password"]'], 10000);
+  }
+  if (!passSel) throw new Error('Could not find the password field');
+  await page.fill(passSel, pass);
+
+  const submitSel = await firstVisible(page, ['#interceptButton', '#next', 'button.sign-in', 'input[type="submit"]'], 8000);
+  if (submitSel) await page.click(submitSel);
+  await page.waitForTimeout(2500);
+}
+
+const onLoginHost = (url: string): boolean => /login\.nationalgrid\.com|b2clogin\.com/.test(url);
+const onMyAccount = (url: string): boolean => /myaccount\.nationalgrid\.com/.test(url) && !onLoginHost(url);
+
+// Run an operator-attended login that can pause at OTP. On the MFA step it calls
+// `onOtpNeeded()`, fills the returned code, submits, and confirms we landed on
+// myaccount. Throws on bad credentials or a login that never completes. Returns
+// the dashboard URL. The caller persists the session (it needs the new login id
+// to scope the state file), so this function doesn't save state itself.
+export async function loginInteractive(
+  page: Page,
+  creds: Creds,
+  hooks: InteractiveLoginHooks,
+  log: (m: string) => void = () => {}
+): Promise<string> {
+  await fillCredentials(page, creds.user, creds.pass, log);
+
+  // If we're still on the login host, it's either an MFA step or a credential
+  // failure. Distinguish the two: MFA → pause for a code; otherwise → fail.
+  if (onLoginHost(page.url())) {
+    if (await looksLikeMfa(page)) {
+      log('one-time passcode required; waiting for the operator');
+      const code = await hooks.onOtpNeeded(); // one-shot; never stored/logged
+      const otpSel = await firstVisible(page, OTP_INPUT_SELECTORS, 8000);
+      if (!otpSel) throw new Error('Could not find the one-time-code field on the MFA page.');
+      await page.fill(otpSel, code);
+      const submitSel = await firstVisible(page, OTP_SUBMIT_SELECTORS, 8000);
+      const navP = page.waitForURL(/myaccount\.nationalgrid\.com/, { timeout: 60000 }).catch(() => {});
+      if (submitSel) await page.click(submitSel);
+      await navP;
+      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    } else {
+      // Some B2C variants gate a final #continue button before redirecting.
+      await page
+        .evaluate(() => {
+          const b = document.querySelector('#continue') as HTMLButtonElement | null;
+          if (b) {
+            b.removeAttribute('disabled');
+            b.click();
+          }
+        })
+        .catch(() => {});
+      await page.waitForURL(/myaccount\.nationalgrid\.com/, { timeout: 60000 }).catch(() => {});
+      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    }
+  }
+
+  const url = page.url();
+  if (!onMyAccount(url)) {
+    if (await looksLikeMfa(page)) {
+      throw new Error('The one-time passcode was not accepted. Double-check the code and try adding the login again.');
+    }
+    const bodyText = (await page.evaluate(() => document.body.innerText).catch(() => '')) as string;
+    throw new Error('Login failed (still on the login host). Check the username and password. Page said: ' + bodyText.slice(0, 200));
+  }
+
   return url;
 }
 
