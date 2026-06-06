@@ -22,6 +22,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SEED="$HERE/seed.sql"
+# Resolve to absolute paths: the prisma steps run from app/, so a repo-relative
+# --schema (e.g. app/prisma/schema.prisma) would otherwise break under `cd app`.
+OLD_SCHEMA="$(realpath "$OLD_SCHEMA")"
+NEW_SCHEMA="$(realpath "$NEW_SCHEMA")"
 TABLES=(Account Bill Usage Cost Weather AppSetting ScrapeRun ScheduleState)
 printf -v TABLE_LIST "'%s'," "${TABLES[@]}"; TABLE_LIST="${TABLE_LIST%,}"   # 'Account','Bill',...
 
