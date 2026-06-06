@@ -200,7 +200,7 @@ export function Dashboard() {
   return (
     <div
       className={`mx-auto flex w-full max-w-[1800px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4 ${
-        lockViewport ? 'xl:h-dvh xl:overflow-hidden' : ''
+        lockViewport ? 'xl:h-dvh xl:gap-2 xl:overflow-hidden xl:py-3' : ''
       }`}
     >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -290,7 +290,10 @@ export function Dashboard() {
         <>
           {/* Compact stat strip: latest / lifetime / elec / gas / est-next, side by
               side on desktop, wrapping to a 2-col grid on narrow screens. */}
-          <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          {/* In fit density the stat strip is compacted at ≥xl (smaller padding +
+              stat type) so the three chart rows below fit in 100dvh with no page
+              scroll; the FILL_BODY_CLASSES height constant is tuned to this chrome. */}
+          <div className={`grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 ${fit ? 'xl:[&_.card]:!p-2.5 xl:[&_.stat]:!text-xl' : ''}`}>
             <div className="card !p-3">
               <div className="card-title text-xs">Latest bill</div>
               <div className="stat text-2xl">{usd(ov?.latestBill?.totalDueAmount, dp)}</div>
@@ -327,19 +330,22 @@ export function Dashboard() {
             )}
           </div>
 
-          {/* Main region: charts grid + bills rail. At ≥xl in "fit" density this
-              flexes to fill the remaining viewport height (no page scroll); below
-              xl it's a normal stacking grid that scrolls with the page. */}
-          <div className={`grid min-h-0 grid-cols-1 gap-3 xl:grid-cols-[1fr_minmax(300px,360px)] ${fit ? 'xl:flex-1' : ''}`}>
+          {/* Main region: charts grid + bills rail. At ≥xl in "fit" density the
+              charts carry explicit (100dvh-derived) heights so the three rows add
+              up to the viewport with no page scroll; the bills rail STRETCHES to
+              that height (grid align stretch) and scrolls internally. Below xl
+              (and in comfortable density) it's a normal stacking grid that scrolls
+              with the page and each chart keeps its fixed 288px height. */}
+          <div className="grid min-h-0 grid-cols-1 gap-3 xl:grid-cols-[1fr_minmax(300px,360px)]">
             {/* Charts */}
             {visibleCharts.length === 0 ? (
               <div className="card text-sm text-slate-400">
                 All charts are hidden. Enable them in <Link href="/settings" className="text-amber-400">Settings</Link>.
               </div>
             ) : (
-              <div className="grid min-h-0 grid-cols-1 gap-3 md:grid-cols-2 xl:auto-rows-fr">
+              <div className={`grid min-h-0 grid-cols-1 gap-3 md:grid-cols-2 ${fit ? 'xl:gap-2' : ''}`}>
                 {visibleCharts.map((id) => (
-                  <div key={id} className="min-h-[18rem] xl:min-h-0">
+                  <div key={id} className={fit ? '' : 'min-h-[18rem]'}>
                     <ConfigurableChart spec={SPEC_BY_ID[id]} rows={ranged} fill={fit} height={288} />
                   </div>
                 ))}

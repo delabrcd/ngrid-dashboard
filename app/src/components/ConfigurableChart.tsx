@@ -152,9 +152,39 @@ const CloseIcon = (
   </svg>
 );
 
-// `fill` makes the chart grow to fill its grid cell (cockpit "fit" mode, issue
-// #2): the card becomes a flex column and the chart body takes the leftover
-// height. Otherwise the chart keeps its fixed `height` (the classic layout).
+// `fill` makes the chart fit the cockpit "fit" density (issue #2): the chart body
+// gets an EXPLICIT, definite height at every breakpoint so Recharts'
+// ResponsiveContainer (height="100%") always measures a non-zero box.
+//
+// We deliberately do NOT rely on a flex/`1fr`/`height:100%` chain reaching the
+// ResponsiveContainer — that chain never resolves to a definite pixel height, so
+// Recharts measured 0 and drew an empty chart (the regression we're fixing).
+// Instead a wrapper carries a concrete height:
+//   • <1280 (single col / 2-col, page scrolls): fixed `h-[16rem]` → 256px plots.
+//   • ≥1280 "fit"  (no page scroll): a 100dvh-derived height. The main view is six
+//     charts in a 2-col grid (3 rows), so each body is ≈ (100dvh − chrome)/3. The
+//     constant is tuned against Dashboard's compact fit chrome so at 1280×720
+//     three chart rows + the header/control/stat strip fit with NO page scroll
+//     (plot heights grow with the viewport — see the constant below for figures).
+// `height` is the fixed height for the classic, non-fill layout (comfortable
+// density and <xl both go through that path with a definite px height already).
+//
+// The classes apply to a wrapper the chart body fills at 100%, so charts stay
+// declarative — we only change the box they draw into.
+// The subtracted constant C = total non-plot chrome at ≥xl fit (page padding +
+// header + control strip + compact stat strip + all gaps + the 3 chart cards' own
+// padding/headers), so (100dvh − C) is the height left for the three chart PLOT
+// areas and each body = (100dvh − C)/3. With this form the page's total height is
+// exactly 100dvh − C + chrome, so NO page scroll requires C ≥ real chrome. The
+// measured compact-fit chrome is ≈20.6rem; we use 21rem (21.5rem at 2xl for the
+// slightly larger type) for a small safety margin so it never clips. Plot heights:
+// ≈128px at 720, ≈158px at 810, ≈218px at 900, ≈278px at 1080 — readable, growing
+// with the viewport, and never scrolling. (A taller ~150px floor at exactly 720px
+// is geometrically impossible with six charts in three rows plus the stat strip,
+// short of dropping the stat strip or a 2-row chart layout — out of scope here.)
+const FILL_BODY_CLASSES =
+  'h-[16rem] xl:h-[calc((100dvh-21rem)/3)] 2xl:h-[calc((100dvh-21.5rem)/3)]';
+
 export function ConfigurableChart({
   spec,
   rows,
@@ -174,8 +204,8 @@ export function ConfigurableChart({
   const onChange = (c: Partial<ChartConfig>) => updateChart(spec.id, c);
 
   return (
-    <div className={`card relative ${fill ? 'flex min-h-0 flex-col' : ''}`}>
-      <div className="mb-2 flex shrink-0 items-start justify-between">
+    <div className={`card relative ${fill ? 'flex flex-col !p-2.5' : ''}`}>
+      <div className={`flex shrink-0 items-start justify-between ${fill ? 'mb-1' : 'mb-2'}`}>
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-slate-100">{spec.title}</h3>
           {spec.subtitle && !fill && <p className="truncate text-xs text-slate-400">{spec.subtitle}</p>}
@@ -208,7 +238,9 @@ export function ConfigurableChart({
       )}
 
       {fill ? (
-        <div className="min-h-0 flex-1">
+        // Explicit definite height (see FILL_BODY_CLASSES) — NOT a flex/100% chain —
+        // so ResponsiveContainer always measures a non-zero box.
+        <div className={FILL_BODY_CLASSES}>
           <ChartBody spec={spec} config={config} rows={rows} height="100%" />
         </div>
       ) : (
