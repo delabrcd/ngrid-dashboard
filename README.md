@@ -31,11 +31,9 @@ PDF. It re-checks automatically as your next bill approaches, and has a manual
   rates, with a confidence band. It's an estimate — never stored, never feeds verification.
 - **Multiple accounts.** Discovers every billing account behind a login and gives you a
   **switcher**; charts and exports follow the selected account.
-- **Encrypted credential store.** Save National Grid logins **AES-256-GCM-encrypted at rest**
-  (key from `NGRID_SECRET_KEY`, or auto-generated and persisted on first run). **Interactive
-  MFA/OTP** login + re-authentication, safe removal (keep or delete that account's data, with
-  a password confirm), and a `needs_reauth` status when a session goes stale. Env creds remain
-  the bootstrap/fallback; a password is never logged or returned to the browser.
+- **Encrypted credential store.** Save National Grid logins **AES-256-GCM-encrypted at rest**,
+  with **interactive MFA/OTP** at setup and safe removal. The encryption key never touches the
+  database, and a password is never logged or shown back to the browser.
 - **Export & download.** **CSV export** of the series and bills, and **bulk PDF download** of
   any bill date range as a **zip** (Windows/macOS) or **tgz** (Linux).
 - **New-bill notifications.** Off by default; on a *scheduled* check that finds a new bill,
@@ -44,11 +42,9 @@ PDF. It re-checks automatically as your next bill approaches, and has a manual
   sized from your historical bill spacing), idle otherwise — easy on National Grid.
 - **Cockpit UI.** A responsive single-screen layout (no page scroll on a 16:9 desktop,
   collapses to mobile), **paginated chart panels**, a **visual month/year range picker** with
-  presets driving every view, per-chart customization, a **live scrape-progress** banner, and
-  the running app **version** in the header + Settings.
-- **Safe upgrades.** A **pre-upgrade `pg_dump` backup** (fail-closed) before any
-  schema-changing deploy, plus CI that gates every merge on the unit tests **and** a
-  migration-safety job proving an upgrade preserves seeded data.
+  presets driving every view, per-chart customization, and a **live scrape-progress** banner.
+- **Tested numbers, safe upgrades.** The cost/rate math ships with hand-calculated tests, and a
+  **fail-closed `pg_dump` backup** runs before any schema-changing deploy.
 
 ## Quick start (Docker)
 
@@ -70,51 +66,31 @@ docker compose up -d
 Open **http://localhost:3000** and **add your National Grid login in the browser** —
 the first-run setup walks you through it (including the **OTP/MFA** step), stores the
 password **encrypted at rest**, and auto-generates the encryption key. No National Grid
-credentials in `.env` required. Update later with `docker compose pull && docker compose up -d`.
+credentials in `.env` required. The first run then logs in, downloads your whole history
+and every PDF (a couple of minutes), and the charts fill in — after that it keeps itself
+up to date automatically.
 
 > **Why a `DB_PASSWORD` is still the one thing you set in `.env`:** Postgres isn't exposed
 > to your network, but the app and the database container still have to agree on a password.
 > Everything else — your National Grid login and the credential-store key — is handled in the
 > browser on first run. A fully `.env`-free quickstart is tracked in
 > [issue #56](https://github.com/delabrcd/ngrid-dashboard/issues/56).
->
-> Prefer to pre-seed the login (e.g. for an unattended install)? The **env path is still
-> supported**: set `NGRID_USER` / `NGRID_PASS` in `.env` and they bootstrap the encrypted
-> store on first start (you may still need the UI for an OTP). See [Configuration](#configuration-env).
 
-**Building from source instead** (developers): clone the repo, then
-`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
+The image (`ghcr.io/delabrcd/ngrid-dashboard`) is built and published by CI; **`:latest` is
+what compose pulls by default**. To pin a specific version, see the
+[Releases & CI](https://github.com/delabrcd/ngrid-dashboard/wiki/Releases-and-CI) wiki page.
 
-### Image tags
-
-The image is published to **`ghcr.io/delabrcd/ngrid-dashboard`** by CI:
-
-| Tag | Points at |
-|---|---|
-| `latest` | the newest tagged release (what `docker compose` pulls by default) |
-| `X.Y.Z`, `X.Y`, `X` | a specific [semver](https://semver.org) release (e.g. `0.1.0`, `0.1`, `0`) |
-| `edge` | the current `main` branch |
-| `sha-xxxxxxx` | the exact commit of any build |
-
-Pin a release for reproducibility by setting `image: ghcr.io/delabrcd/ngrid-dashboard:0.1.0`
-in your compose file.
-
-**Cutting a release = publishing a GitHub Release.** The release creates the tag and drives
-the build; the version is derived from the release tag (no manual `package.json` bump):
+### Updating
 
 ```bash
-gh release create v0.1.1 --generate-notes
+docker compose pull && docker compose up -d
 ```
 
-(or GitHub UI → Releases → *Draft a new release* → choose a new tag `vX.Y.Z` → *Publish*).
-CI then publishes `0.1.1`/`0.1`/`0` and moves `:latest`. (Each release is also gated on the
-unit tests and a migration-safety check — see [Accuracy & tests](#accuracy--tests).) The app
-shows the running version in its header and Settings (`vX.Y.Z` for releases,
-`0.0.0-edge.<sha>` for `main`/`edge` builds). Once you've added your login, the first
-run logs in, downloads your whole history and every PDF (a couple of minutes), then the
-charts fill in. After that it keeps itself up to date automatically.
+Your data lives in volumes (see [Your data](#your-data)), so it survives the upgrade. Before
+any schema-changing upgrade the app takes a fail-closed `pg_dump` backup first, so there's
+always a restore point.
 
-### Configuration (`.env`)
+## Configuration (`.env`)
 
 **Only `DB_PASSWORD` (and the matching password in `DATABASE_URL`) is required** — everything
 else is optional. Your National Grid login and the encryption key are handled in the browser on
@@ -133,86 +109,57 @@ unattended install. Full reference + comments live in [`.env.example`](.env.exam
 | `NGRID_SECRET_KEY` | **Optional.** Key for the **encrypted credential store** (AES-256-GCM). Leave unset and one is **auto-generated** and persisted under the session volume on first run; set it (`openssl rand -base64 32`) to **override** the auto-generated key with your own. The key is **never** stored in the DB. |
 | `NOTIFY_CHANNEL` + channel vars | New-bill notifications (off by default): `webhook` (`NOTIFY_WEBHOOK_URL`), `ntfy` (`NTFY_URL`/`NTFY_TOPIC`/`NTFY_TOKEN`), or `smtp` (`SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`/`SMTP_TO`). Leave `NOTIFY_CHANNEL` unset to infer from whichever block you fill in. |
 | `APP_BASE_URL` | Public URL of this dashboard, used to build the link in a notification |
-| `BACKUP_DIR` / `BACKUP_BEFORE_MIGRATE` / `BACKUP_RETENTION` | Pre-upgrade DB backups (default `./data/backups`, on, keep newest 10) — see [Data & volumes](#data--volumes) |
+| `BACKUP_DIR` / `BACKUP_BEFORE_MIGRATE` / `BACKUP_RETENTION` | Pre-upgrade DB backups (default `./data/backups`, on, keep newest 10) — see [Your data](#your-data) |
 
-## How it works
+## Using it
 
-- **Scraper** (`app/src/lib/ngrid/`) drives a headless Chromium (bundled in the
-  image). It logs in through National Grid's Azure AD B2C flow once, then **reuses the
-  session** so it rarely needs to log in again. It reads your data by intercepting the
-  portal's *own* API calls and widening their date filters — so it stays aligned with
-  whatever the site returns and keeps the site's auth intact. A login can fan out to
-  **multiple billing accounts**; each is scraped and selectable in the UI.
-- **Login store**: National Grid logins are saved **AES-256-GCM-encrypted** in the DB
-  (`NgLogin`), with **interactive MFA/OTP** when a login needs it. Env creds are the
-  bootstrap/fallback when no stored login exists.
-- **Database**: Postgres, schema in `app/prisma/schema.prisma`. On startup the app syncs the
-  schema (`prisma db push`); before any schema-changing upgrade it takes a fail-closed
-  `pg_dump` backup first.
-- **Weather**: full bill-history temperatures from **Open-Meteo** (monthly + daily),
-  geocoded from your service address, used for the weather charts and **degree-day**
-  (HDD/CDD) weather-normalization.
-- **Scheduler**: predicts your next statement date from the spacing of past bills and only
-  checks **near that date** (predicted ± a window sized from your historical bill spacing),
-  staying idle otherwise. Can optionally **notify** you (webhook / ntfy / SMTP) when a
-  scheduled check finds a new bill.
-- **Dashboard**: Next.js + Recharts — a responsive single-screen cockpit with a month/year
-  range picker, paginated chart panels, CSV export, bulk-PDF download, and a next-bill cost
-  estimate.
-
-## Accuracy & tests
-
-The numbers are validated two ways, because an API value can be plausible but wrong:
-
-- **Hand-calculated unit tests** (`app/test/`, [vitest](https://vitest.dev)) cover the PDF
-  charge parser, the rate math (supply / all-in / 12-month average), and bill-date
-  prediction with values worked out by hand. **CI runs them on every PR/push and gates the
-  image build on them** (plus a migration-safety job that proves a schema upgrade preserves
-  data on a seeded copy of the previous release). Run them yourself:
-  ```bash
-  docker build --target test -t ngrid-test ./app && docker run --rm ngrid-test
-  ```
-- **Cross-validation against the actual bills.** The bill PDF is the source of truth, so
-  `GET /api/verify` (or **Settings → Verify all bills**) re-parses every PDF and asserts
-  the stored/API numbers match it: bill total, kWh/therms usage, and the supply/delivery
-  breakdown, plus internal consistency (supply + delivery + other = current charges) and
-  that the statement *Amount Due* = current charges + any carried-over balance.
-
-  This caught a real issue: the API's bill `totalDueAmount` is the statement **Amount
-  Due** (which can include a carried-over balance or late fees), *not* the period's
-  energy cost. The dashboard uses the PDF's **Total Current Charges** for all cost and
-  rate analysis so carryovers don't distort your numbers.
+- **Add your National Grid login.** On first run the UI walks you through entering your email
+  and password and answering the **OTP/MFA** challenge. The password is stored
+  **encrypted at rest**; you'll re-authenticate the same way if a session ever goes stale (a
+  clear `needs re-auth` status tells you when). More:
+  [Accounts and Login](https://github.com/delabrcd/ngrid-dashboard/wiki/Accounts-and-Login).
+- **Multiple accounts.** A single login can cover several billing accounts — the dashboard
+  discovers them all and gives you a **switcher** in the header. Every chart and export follows
+  the account you've selected.
+- **Pick a range.** A **visual month/year range picker** (with presets) drives every chart at
+  once. Each chart panel is paginated and individually customizable; your range and display
+  prefs are remembered. More:
+  [Range and Customization](https://github.com/delabrcd/ngrid-dashboard/wiki/Range-and-Customization).
+- **Read your cost & usage.** Stat cards summarize the current bill and a next-bill **cost
+  estimate**; the charts break out usage, supply vs delivery cost, effective **rates**, and a
+  **usage-vs-weather** view with degree-days.
+- **Export & download.** **CSV** of the series and bills, and a **bulk PDF download** of any
+  date range as a single archive (zip on Windows/macOS, tgz on Linux).
+- **Get notified.** Optionally have a *scheduled* check that finds a new bill ping you exactly
+  once over **webhook / ntfy / SMTP** (off by default — enable it in `.env`). More:
+  [Notifications](https://github.com/delabrcd/ngrid-dashboard/wiki/Notifications).
+- **Check on demand.** The scheduler runs itself near your predicted bill date, but the
+  **"Check for new bills"** button forces a fresh scrape any time, with a live progress banner.
 
 ## Security & etiquette — please read
 
 - **There is no built-in login.** The dashboard shows your financial data to anyone who
   can reach the port. Keep it on your LAN, or put it behind a reverse proxy / VPN /
-  SSO. **Do not expose port 3000 to the public internet.**
-- When you add your login through the UI (the default path), the password is **encrypted at
-  rest (AES-256-GCM)** in the DB; the key (auto-generated, or from `NGRID_SECRET_KEY`) lives
-  only in the session volume, never in the DB, and a decrypted password is never logged or
-  returned to the browser. If you instead pre-seed credentials in `.env`, keep it private
-  (`chmod 600 .env`).
-- The in-app login-management UI is **not** a public auth layer — it inherits the same access
-  gate (LAN / reverse proxy / SSO) and must never expose financial data un-gated.
-- The saved Playwright login **session** (live auth tokens) lives in a root-only Docker volume
-  (`0600`), not in your working directory.
-- This automates access to **your own account** for personal use. Be gentle: the app
-  reuses its session and rate-limits checks to avoid hammering National Grid. Automated
-  access may be against National Grid's Terms of Service — use at your own risk.
-- **MFA/OTP** is supported **interactively** when you set up or re-authenticate a login in the
-  UI. The **unattended scheduler** can't answer an OTP prompt, so a login that always demands
-  MFA can't be auto-refreshed (it surfaces a clear status).
+  SSO. **Do not expose port 3000 to the public internet.** The in-app login-management UI is
+  **not** a public auth layer — it inherits that same access gate.
+- **Your credentials are encrypted at rest.** Logins you add in the UI are stored
+  **AES-256-GCM-encrypted** in the DB; the encryption key lives only in the session volume,
+  never in the database, and a decrypted password is never logged or returned to the browser.
+  If you instead pre-seed credentials in `.env`, keep it private (`chmod 600 .env`). The live
+  Playwright login session is kept in a root-only Docker volume (`0600`), out of your working
+  directory.
+- **Personal use only.** This automates access to **your own account**. Be gentle: the app
+  reuses its session and rate-limits checks to avoid hammering National Grid. Automated access
+  may be against National Grid's Terms of Service — use at your own risk.
 
-## Data & volumes
+## Your data
 
 - **Postgres** → Docker named volume `pgdata` (managed by Docker; no host-permission
   surprises). Back up with `docker compose exec ngrid_postgres pg_dump -U ngrid ngrid > backup.sql`.
 - **Login session + secret key** → Docker named volume `session` (sensitive: holds live auth
-  tokens, so it's kept in a root-only volume, `0600`, out of your working directory — not a
-  bind mount). If you don't set `NGRID_SECRET_KEY`, the auto-generated credential-store key is
-  persisted here too (`session/secret.key`, `0600`) — keep this volume to keep your stored
-  logins decryptable.
+  tokens, so it's kept in a root-only volume, `0600`, out of your working directory). If you
+  don't set `NGRID_SECRET_KEY`, the auto-generated credential-store key is persisted here too
+  (`session/secret.key`, `0600`) — keep this volume to keep your stored logins decryptable.
 - **Bill PDFs** → a host directory, `./data/pdfs/<account>/<date>.pdf` by default; point
   `PDF_DIR` at any path (e.g. a NAS) in `.env`.
 - **Pre-upgrade DB backups** → a host directory, `./data/backups` by default (`BACKUP_DIR`).
@@ -230,7 +177,15 @@ To get PDFs out of the container if you change the mount: `docker compose cp ngr
 To wipe everything and start over: `docker compose down -v` (removes the named volumes), then
 delete your PDF directory.
 
+## Contributing / development
+
+Building from source, running the tests, the release flow, and how the scraper works all live
+in [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[project wiki](https://github.com/delabrcd/ngrid-dashboard/wiki).
+
 ## License / disclaimer
 
 [MIT](LICENSE). Personal project — not affiliated with, endorsed by, or supported by
 National Grid.
+</content>
+</invoke>
