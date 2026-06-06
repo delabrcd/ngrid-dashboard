@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A National Grid billing account. One login can expose several (multi-premise).
+// region / companyCode are read from the account API so other NG regions work
+// with no code changes.
+model Account {
+  id             Int      @id @default(autoincrement())
+  accountNumber  String   @unique
+  accountLink    String?
+  region         String?
+  companyCode    String?
+  serviceAddress String?
+  fuelTypes      String[] @default([])
+  premiseNumber  String?
+  customerNumber String?
+  firstSeenAt    DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  bills         Bill[]
+  usages        Usage[]
+  costs         Cost[]
+  scrapeRuns    ScrapeRun[]
+  scheduleState ScheduleState?
+}
+
+// One statement. PDF is stored on disk; pdfPath points at it.
+model Bill {
+  id             Int      @id @default(autoincrement())
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId      Int
+  statementDate  DateTime @db.Date
+  periodFrom     DateTime? @db.Date
+  periodTo       DateTime? @db.Date
+  totalDueAmount Float?    // statement "Amount Due" from the API (may include carryover)
+  currentCharges Float?    // this period's energy charges from the bill PDF (used for cost analysis)
+  status         String?
+  pdfPath        String?
+  createdAt      DateTime @default(now())
+
+  @@unique([accountId, statementDate])
+  @@index([accountId, statementDate])
+}
+
+// Monthly usage quantity per fuel/usage type (TOTAL_KWH, THERMS).
+model Usage {
+  id              Int      @id @default(autoincrement())
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId       Int
+  usageType       String   // TOTAL_KWH | THERMS
+  periodYearMonth Int      // e.g. 202605
+  dateFrom        DateTime? @db.Date
+  dateTo          DateTime? @db.Date
+  quantity        Float
+  unit            String   // kWh | therms
+
+  @@unique([accountId, usageType, periodYearMonth])
+}
+
+// Monthly cost per fuel. kind=SUPPLY is the usage/supply charge; kind=BILL_AMOUNT
+// is the per-fuel slice of the total bill (delivery = BILL_AMOUNT - SUPPLY).
+model Cost {
+  id              Int      @id @default(autoincrement())
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId       Int
+  fuelType        String   // ELECTRIC | GAS
+  kind            String   // SUPPLY | BILL_AMOUNT
+  periodYearMonth Int
+  dateFrom        DateTime? @db.Date
+  dateTo          DateTime? @db.Date
+  amount          Float
+
+  @@unique([accountId, fuelType, kind, periodYearMonth])
+}
+
+// Monthly average temperature for a region (shared across accounts in that region).
+model Weather {
+  id             Int      @id @default(autoincrement())
+  region         String
+  monthYear      DateTime @db.Date
+  avgTemperature Float
+  unit           String   @default("F")
+
+  @@unique([region, monthYear])
+}
+
+enum ScrapeTrigger {
+  MANUAL
+  SCHEDULED
+}
+
+enum ScrapeStatus {
+  RUNNING
+  SUCCESS
+  ERROR
+}
+
+// Audit trail + drives the "last checked" badge and the manual-button progress.
+model ScrapeRun {
+  id         Int           @id @default(autoincrement())
+  account    Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  accountId  Int?
+  trigger    ScrapeTrigger
+  status     ScrapeStatus  @default(RUNNING)
+  startedAt  DateTime      @default(now())
+  finishedAt DateTime?
+  billsAdded Int           @default(0)
+  message    String?
+
+  @@index([startedAt])
+}
+
+// Simple key/value store for runtime app settings (e.g. schedulerEnabled).
+model AppSetting {
+  key   String @id
+  value String
+}
+
+// Per-account scheduling: when we predict the next bill and when to next check.
+model ScheduleState {
+  accountId             Int       @id
+  account               Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  predictedNextBillDate DateTime? @db.Date
+  nextCheckAt           DateTime?
+  lastCheckedAt         DateTime?
+}

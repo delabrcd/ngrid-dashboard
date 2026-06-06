@@ -1,0 +1,49 @@
+# Standalone deployment — for running on your own machine with minimal setup.
+# 1. cp .env.example .env  &&  edit .env
+# 2. docker compose up -d
+# 3. open http://localhost:3000
+services:
+  app:
+    # Pull the prebuilt image (default):  docker compose up -d
+    # Build locally instead:              docker compose up -d --build
+    image: ghcr.io/delabrcd/ngrid-dashboard:latest
+    build:
+      context: ./app
+    container_name: ngrid_dashboard
+    restart: unless-stopped
+    # All app config (incl. the National Grid password, which may contain $ and #)
+    # is injected verbatim via env_file — NOT compose ${} interpolation.
+    env_file: .env
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - ./data/pdfs:/data/pdfs
+      - ./data/session:/data/session
+    depends_on:
+      ngrid_postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  ngrid_postgres:
+    image: postgres:16
+    container_name: ngrid_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-ngrid}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-ngrid}
+      TZ: ${TZ:-America/New_York}
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ngrid} -d ${DB_NAME:-ngrid}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge

@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-slate-950 text-slate-100 antialiased;
+  background-image:
+    radial-gradient(60rem 60rem at 110% -10%, rgba(245, 158, 11, 0.08), transparent 50%),
+    radial-gradient(50rem 50rem at -10% 10%, rgba(56, 189, 248, 0.08), transparent 50%);
+  background-attachment: fixed;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-slate-800/80 bg-slate-900/60 p-5 shadow-lg shadow-black/20 backdrop-blur;
+  }
+  .card-title {
+    @apply text-sm font-medium text-slate-400;
+  }
+  .stat {
+    @apply text-3xl font-semibold tracking-tight text-slate-50;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-primary {
+    @apply btn bg-amber-500 text-slate-950 hover:bg-amber-400;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-slate-700/70 bg-slate-800/50 px-3 py-1 text-xs text-slate-300;
+  }
+}

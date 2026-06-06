@@ -1,0 +1,136 @@
+// Azure AD B2C login for myaccount.nationalgrid.com, with session reuse.
+// Ported from the proven standalone scraper (ngrid-scrape/lib.js).
+import fs from 'fs';
+import path from 'path';
+import type { BrowserContext, Page } from 'playwright';
+
+const DATA_DIR = process.env.DATA_DIR || '/data';
+const SESSION_DIR = path.join(DATA_DIR, 'session');
+const STATE_FILE = path.join(SESSION_DIR, 'session.json');
+
+export function dataDir(): string {
+  return DATA_DIR;
+}
+
+export function getCreds(): { user: string; pass: string } {
+  const user = process.env.NGRID_USER;
+  const pass = process.env.NGRID_PASS;
+  if (!user || !pass) throw new Error('NGRID_USER / NGRID_PASS env vars are not set');
+  return { user, pass };
+}
+
+export function contextOptions(): Record<string, unknown> {
+  const opts: Record<string, unknown> = {
+    userAgent:
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+    viewport: { width: 1366, height: 900 },
+  };
+  if (fs.existsSync(STATE_FILE)) opts.storageState = STATE_FILE;
+  return opts;
+}
+
+export async function saveState(ctx: BrowserContext): Promise<void> {
+  fs.mkdirSync(SESSION_DIR, { recursive: true });
+  await ctx.storageState({ path: STATE_FILE });
+}
+
+async function firstVisible(page: Page, selectors: string[], timeout = 15000): Promise<string | null> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const sel of selectors) {
+      const el = await page.$(sel);
+      if (el && (await el.isVisible().catch(() => false))) return sel;
+    }
+    await page.waitForTimeout(300);
+  }
+  return null;
+}
+
+// Detect an MFA/OTP step so we can fail with a clear message instead of hanging.
+async function looksLikeMfa(page: Page): Promise<boolean> {
+  const txt = (await page.evaluate(() => document.body.innerText).catch(() => '')) as string;
+  return /one[\s-]?time|verification code|enter the code|passcode|authenticator/i.test(txt);
+}
+
+async function login(page: Page, user: string, pass: string, log: (m: string) => void): Promise<string> {
+  log('opening myaccount.nationalgrid.com');
+  await page.goto('https://myaccount.nationalgrid.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForURL(/login\.nationalgrid\.com|b2clogin\.com/, { timeout: 60000 }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+  const emailSel = await firstVisible(page, ['#signInName', '#email', 'input[type="email"]', 'input[name="email"]']);
+  if (!emailSel) throw new Error('Could not find the email field on the login page');
+  await page.fill(emailSel, user);
+
+  let passSel = await firstVisible(page, ['#password', 'input[type="password"]'], 3000);
+  if (!passSel) {
+    const nextSel = await firstVisible(page, ['#interceptButton', '#next', '#continue', 'button[type="submit"]'], 3000);
+    if (nextSel) {
+      await page.click(nextSel);
+      await page.waitForTimeout(2000);
+    }
+    passSel = await firstVisible(page, ['#password', 'input[type="password"]'], 10000);
+  }
+  if (!passSel) throw new Error('Could not find the password field');
+  await page.fill(passSel, pass);
+
+  const submitSel = await firstVisible(page, ['#interceptButton', '#next', 'button.sign-in', 'input[type="submit"]'], 8000);
+  const navP = page.waitForURL(/myaccount\.nationalgrid\.com/, { timeout: 60000 }).catch(() => {});
+  if (submitSel) await page.click(submitSel);
+  await page.waitForTimeout(2500);
+  if (/login\.nationalgrid\.com|b2clogin\.com/.test(page.url())) {
+    if (await looksLikeMfa(page)) {
+      throw new Error(
+        'This account requires a one-time passcode (MFA) at login, which the unattended scraper cannot complete. ' +
+          'Disable MFA on the account or wait for interactive-login support.'
+      );
+    }
+    await page
+      .evaluate(() => {
+        const b = document.querySelector('#continue') as HTMLButtonElement | null;
+        if (b) {
+          b.removeAttribute('disabled');
+          b.click();
+        }
+      })
+      .catch(() => {});
+  }
+  await navP;
+  await page.waitForTimeout(2500);
+  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+  const url = page.url();
+  if (/login\.nationalgrid\.com|b2clogin\.com/.test(url)) {
+    if (await looksLikeMfa(page)) throw new Error('Login blocked by an MFA/OTP step.');
+    const bodyText = (await page.evaluate(() => document.body.innerText).catch(() => '')) as string;
+    throw new Error('Login failed (still on the login host). Check credentials. Page said: ' + bodyText.slice(0, 300));
+  }
+  return url;
+}
+
+// Reuse a saved session if still valid; otherwise log in fresh and persist it.
+// Returns the dashboard URL (carries the ?accountLink= param).
+export async function ensureLoggedIn(
+  page: Page,
+  log: (m: string) => void = () => {}
+): Promise<string> {
+  const ctx = page.context();
+  const { user, pass } = getCreds();
+  if (fs.existsSync(STATE_FILE)) {
+    log('trying saved session');
+    await page
+      .goto('https://myaccount.nationalgrid.com/dashboard', { waitUntil: 'domcontentloaded', timeout: 60000 })
+      .catch(() => {});
+    await page.waitForTimeout(2500);
+    const url = page.url();
+    if (/myaccount\.nationalgrid\.com\/(dashboard|$)/.test(url) && !/login\.nationalgrid\.com|b2clogin\.com/.test(url)) {
+      log('session valid');
+      return url;
+    }
+    log('session expired, logging in fresh');
+  }
+  const url = await login(page, user, pass, log);
+  await saveState(ctx);
+  log('session saved');
+  return url;
+}
