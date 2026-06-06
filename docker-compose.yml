@@ -16,8 +16,12 @@ services:
     ports:
       - "${APP_PORT:-3000}:3000"
     volumes:
-      - ./data/pdfs:/data/pdfs
-      - ./data/session:/data/session
+      # Bill PDFs live on a host dir so you can browse/back them up directly
+      # (override the location with PDF_DIR in .env).
+      - ${PDF_DIR:-./data/pdfs}:/data/pdfs
+      # The session holds live auth tokens — keep it in a Docker-managed volume
+      # (root-only on the host, out of your working directory), not a bind mount.
+      - session:/data/session
     depends_on:
       ngrid_postgres:
         condition: service_healthy
@@ -34,7 +38,7 @@ services:
       POSTGRES_DB: ${DB_NAME:-ngrid}
       TZ: ${TZ:-America/New_York}
     volumes:
-      - ./data/db:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ngrid} -d ${DB_NAME:-ngrid}"]
       interval: 10s
@@ -42,6 +46,10 @@ services:
       retries: 5
     networks:
       - internal
+
+volumes:
+  pgdata:
+  session:
 
 networks:
   internal:

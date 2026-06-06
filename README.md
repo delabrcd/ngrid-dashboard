@@ -102,8 +102,8 @@ The numbers are validated two ways, because an API value can be plausible but wr
 - **There is no built-in login.** The dashboard shows your financial data to anyone who
   can reach the port. Keep it on your LAN, or put it behind a reverse proxy / VPN /
   SSO. **Do not expose port 3000 to the public internet.**
-- Your credentials live in `.env` and the saved session lives in `./data/session/` —
-  both are git-ignored. Keep them private (`chmod 600 .env`).
+- Your credentials live in `.env` — keep it private (`chmod 600 .env`). The saved login
+  session lives in a root-only Docker volume (`0600`), not in your working directory.
 - This automates access to **your own account** for personal use. Be gentle: the app
   reuses its session and rate-limits checks to avoid hammering National Grid. Automated
   access may be against National Grid's Terms of Service — use at your own risk.
@@ -112,12 +112,17 @@ The numbers are validated two ways, because an API value can be plausible but wr
 
 ## Data & volumes
 
-Everything persists under `./data/` (bind-mounted):
-- `data/db/` — Postgres
-- `data/pdfs/<account>/<date>.pdf` — bill PDFs
-- `data/session/session.json` — saved login session (sensitive)
+- **Postgres** → Docker named volume `pgdata` (managed by Docker; no host-permission
+  surprises). Back up with `docker compose exec ngrid_postgres pg_dump -U ngrid ngrid > backup.sql`.
+- **Login session** → Docker named volume `session` (sensitive: holds live auth tokens, so
+  it's kept in a root-only volume, `0600`, out of your working directory — not a bind mount).
+- **Bill PDFs** → a host directory, `./data/pdfs/<account>/<date>.pdf` by default; point
+  `PDF_DIR` at any path (e.g. a NAS) in `.env`.
 
-To wipe and start over: `docker compose down && rm -rf data`.
+To get PDFs out of the container if you change the mount: `docker compose cp ngrid_dashboard:/data/pdfs ./pdfs`.
+
+To wipe everything and start over: `docker compose down -v` (removes the named volumes), then
+delete your PDF directory.
 
 ## License / disclaimer
 

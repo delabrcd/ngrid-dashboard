@@ -30,8 +30,12 @@ export function contextOptions(): Record<string, unknown> {
 }
 
 export async function saveState(ctx: BrowserContext): Promise<void> {
-  fs.mkdirSync(SESSION_DIR, { recursive: true });
+  // The session holds live auth cookies + bearer tokens — restrict it to the
+  // owner (0700 dir, 0600 file) on top of living in a root-only Docker volume.
+  fs.mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(SESSION_DIR, 0o700);
   await ctx.storageState({ path: STATE_FILE });
+  fs.chmodSync(STATE_FILE, 0o600);
 }
 
 async function firstVisible(page: Page, selectors: string[], timeout = 15000): Promise<string | null> {
