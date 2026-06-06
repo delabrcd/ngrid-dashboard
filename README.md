@@ -59,7 +59,7 @@ two files (the compose file pulls the prebuilt image from GHCR):
 mkdir ngrid-dashboard && cd ngrid-dashboard
 curl -fsSLO https://raw.githubusercontent.com/delabrcd/ngrid-dashboard/main/docker-compose.yml
 curl -fsSL  https://raw.githubusercontent.com/delabrcd/ngrid-dashboard/main/.env.example -o .env
-# edit .env: set NGRID_USER / NGRID_PASS (your National Grid login) and a DB_PASSWORD
+# edit .env: set a DB_PASSWORD (and the matching password in DATABASE_URL)
 nano .env
 docker compose up -d
 ```
@@ -67,8 +67,20 @@ docker compose up -d
 (Or download `docker-compose.yml` + `.env.example` from the
 [latest release](https://github.com/delabrcd/ngrid-dashboard/releases/latest).)
 
-Open **http://localhost:3000** and click **Check for new bills**. Update later with
-`docker compose pull && docker compose up -d`.
+Open **http://localhost:3000** and **add your National Grid login in the browser** —
+the first-run setup walks you through it (including the **OTP/MFA** step), stores the
+password **encrypted at rest**, and auto-generates the encryption key. No National Grid
+credentials in `.env` required. Update later with `docker compose pull && docker compose up -d`.
+
+> **Why a `DB_PASSWORD` is still the one thing you set in `.env`:** Postgres isn't exposed
+> to your network, but the app and the database container still have to agree on a password.
+> Everything else — your National Grid login and the credential-store key — is handled in the
+> browser on first run. A fully `.env`-free quickstart is tracked in
+> [issue #56](https://github.com/delabrcd/ngrid-dashboard/issues/56).
+>
+> Prefer to pre-seed the login (e.g. for an unattended install)? The **env path is still
+> supported**: set `NGRID_USER` / `NGRID_PASS` in `.env` and they bootstrap the encrypted
+> store on first start (you may still need the UI for an OTP). See [Configuration](#configuration-env).
 
 **Building from source instead** (developers): clone the repo, then
 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
@@ -98,26 +110,27 @@ gh release create v0.1.1 --generate-notes
 CI then publishes `0.1.1`/`0.1`/`0` and moves `:latest`. (Each release is also gated on the
 unit tests and a migration-safety check — see [Accuracy & tests](#accuracy--tests).) The app
 shows the running version in its header and Settings (`vX.Y.Z` for releases,
-`0.0.0-edge.<sha>` for `main`/`edge` builds). The first run logs
-in, downloads your whole history and every PDF (a couple of minutes), then the charts
-fill in. After that it keeps itself up to date automatically.
+`0.0.0-edge.<sha>` for `main`/`edge` builds). Once you've added your login, the first
+run logs in, downloads your whole history and every PDF (a couple of minutes), then the
+charts fill in. After that it keeps itself up to date automatically.
 
 ### Configuration (`.env`)
 
-Only the National Grid login and DB password are required; everything below them is optional
-(sensible defaults, or a feature stays off until configured). Full reference + comments live in
-[`.env.example`](.env.example).
+**Only `DB_PASSWORD` (and the matching password in `DATABASE_URL`) is required** — everything
+else is optional. Your National Grid login and the encryption key are handled in the browser on
+first run (see [Quick start](#quick-start-docker)); set them here only if you want to pre-seed an
+unattended install. Full reference + comments live in [`.env.example`](.env.example).
 
 | Var | What |
 |---|---|
-| `NGRID_USER` / `NGRID_PASS` | Your National Grid account email + password. These are the **bootstrap/fallback** login — once you save a login in the UI (encrypted), the stored one is used. |
-| `DB_PASSWORD` | Any long random string (used for the bundled Postgres) |
-| `DATABASE_URL` | Pre-filled to point at the `ngrid_postgres` container — change the password to match `DB_PASSWORD` |
+| `DB_PASSWORD` | **Required.** Any long random string (used for the bundled Postgres). |
+| `DATABASE_URL` | **Required.** Pre-filled to point at the `ngrid_postgres` container — change the password to match `DB_PASSWORD`. |
+| `NGRID_USER` / `NGRID_PASS` | **Optional.** Your National Grid email + password. Leave unset and add the login in the browser instead; set them to **pre-seed/bootstrap** (e.g. unattended installs) — on first start they're imported into the encrypted store, with env as the ongoing fallback. |
 | `APP_PORT` | Host port for the UI (default 3000) |
 | `TZ` | Your timezone, e.g. `America/New_York` |
 | `PDF_DIR` | Host path for bill PDFs (default `./data/pdfs`) |
 | `SCHEDULER_ENABLED` | `false` to disable automatic checking (manual button only); also toggleable in Settings |
-| `NGRID_SECRET_KEY` | Key for the **encrypted credential store** (AES-256-GCM). `openssl rand -base64 32`. Optional — if unset, one is auto-generated and persisted under the session volume. The key is **never** stored in the DB. |
+| `NGRID_SECRET_KEY` | **Optional.** Key for the **encrypted credential store** (AES-256-GCM). Leave unset and one is **auto-generated** and persisted under the session volume on first run; set it (`openssl rand -base64 32`) to **override** the auto-generated key with your own. The key is **never** stored in the DB. |
 | `NOTIFY_CHANNEL` + channel vars | New-bill notifications (off by default): `webhook` (`NOTIFY_WEBHOOK_URL`), `ntfy` (`NTFY_URL`/`NTFY_TOPIC`/`NTFY_TOKEN`), or `smtp` (`SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM`/`SMTP_TO`). Leave `NOTIFY_CHANNEL` unset to infer from whichever block you fill in. |
 | `APP_BASE_URL` | Public URL of this dashboard, used to build the link in a notification |
 | `BACKUP_DIR` / `BACKUP_BEFORE_MIGRATE` / `BACKUP_RETENTION` | Pre-upgrade DB backups (default `./data/backups`, on, keep newest 10) — see [Data & volumes](#data--volumes) |
@@ -175,10 +188,11 @@ The numbers are validated two ways, because an API value can be plausible but wr
 - **There is no built-in login.** The dashboard shows your financial data to anyone who
   can reach the port. Keep it on your LAN, or put it behind a reverse proxy / VPN /
   SSO. **Do not expose port 3000 to the public internet.**
-- Your credentials live in `.env` — keep it private (`chmod 600 .env`). If you save a login
-  through the UI instead, the password is **encrypted at rest (AES-256-GCM)** in the DB; the
-  key (from `NGRID_SECRET_KEY`, or auto-generated) lives only in the session volume, never in
-  the DB, and a decrypted password is never logged or returned to the browser.
+- When you add your login through the UI (the default path), the password is **encrypted at
+  rest (AES-256-GCM)** in the DB; the key (auto-generated, or from `NGRID_SECRET_KEY`) lives
+  only in the session volume, never in the DB, and a decrypted password is never logged or
+  returned to the browser. If you instead pre-seed credentials in `.env`, keep it private
+  (`chmod 600 .env`).
 - The in-app login-management UI is **not** a public auth layer — it inherits the same access
   gate (LAN / reverse proxy / SSO) and must never expose financial data un-gated.
 - The saved Playwright login **session** (live auth tokens) lives in a root-only Docker volume
