@@ -304,6 +304,15 @@ export function SettingsView() {
         </div>
       </section>
 
+      {/* About */}
+      <section className="card">
+        <h2 className="text-lg font-semibold text-slate-100">About</h2>
+        <div className="mt-3 flex items-center gap-2 text-sm">
+          <span className="text-slate-500">Version</span>
+          <span className="font-mono text-slate-200">v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}</span>
+        </div>
+      </section>
+
       {/* National Grid logins */}
       <NgLoginsSection />
 
