@@ -56,6 +56,10 @@ export function SettingsView() {
   const [savingSched, setSavingSched] = useState(false);
   const [verify, setVerify] = useState<{ ok: boolean; total: number; failed: number; bills: { statementDate: string; ok: boolean; checks: { name: string; ok: boolean; detail?: string }[] }[] } | null>(null);
   const [verifying, setVerifying] = useState(false);
+  // Bill-PDF bulk-download range. Empty until the user (or the loaded account)
+  // fills them; defaulted once we know the account's first/last statement.
+  const [pdfFrom, setPdfFrom] = useState('');
+  const [pdfTo, setPdfTo] = useState('');
 
   const runVerify = async () => {
     setVerifying(true);
@@ -85,6 +89,16 @@ export function SettingsView() {
   useEffect(() => {
     loadServer();
   }, [loadServer]);
+
+  // Seed the bulk-PDF range to the account's full history once it's known, but
+  // never clobber a value the user has already set.
+  useEffect(() => {
+    if (server?.firstStatement) setPdfFrom((v) => v || server.firstStatement!);
+    if (server?.latestBill?.statementDate) setPdfTo((v) => v || server.latestBill!.statementDate);
+  }, [server?.firstStatement, server?.latestBill?.statementDate]);
+
+  const pdfRangeValid = !!pdfFrom && !!pdfTo && pdfFrom <= pdfTo;
+  const pdfExportQuery = `?from=${pdfFrom}&to=${pdfTo}${exportScope}`;
 
   const setScheduler = async (enabled: boolean) => {
     setSavingSched(true);
@@ -228,6 +242,31 @@ export function SettingsView() {
               <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export?dataset=bills${exportScope}`} download>
                 Bills
               </a>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-slate-800 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Download bill PDFs</div>
+              <div className="text-xs text-slate-500">Bundle every bill PDF in a date range into one archive (tgz on Linux, zip on Windows/macOS).</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="date" value={pdfFrom} max={pdfTo || undefined} onChange={(e) => setPdfFrom(e.target.value)}
+                className="rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200" />
+              <span className="text-xs text-slate-500">to</span>
+              <input type="date" value={pdfTo} min={pdfFrom || undefined} onChange={(e) => setPdfTo(e.target.value)}
+                className="rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200" />
+              {pdfRangeValid ? (
+                <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export/pdfs${pdfExportQuery}`} download>
+                  Download PDFs
+                </a>
+              ) : (
+                <button className="btn cursor-not-allowed border border-slate-800 bg-slate-900/40 text-slate-500" disabled>
+                  Download PDFs
+                </button>
+              )}
             </div>
           </div>
         </div>
