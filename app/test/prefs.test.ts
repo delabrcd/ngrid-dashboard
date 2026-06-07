@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeOrder, mergeRange } from '../src/lib/cockpit';
+import { mergePrefs, DEFAULT_PREFS } from '../src/lib/prefs';
 
 // mergeOrder keeps the user's saved chart order but appends charts that were
 // added to the app AFTER they last saved their prefs (the bug that hid the
@@ -66,5 +67,24 @@ describe('mergeRange (hand-calculated)', () => {
       fromYm: 202305,
       toYm: null,
     });
+  });
+});
+
+// mergePrefs carries the showProjection display pref (issue #69) through a
+// localStorage round-trip: it defaults on for new/returning users who never saw
+// the toggle, but an explicit `false` must survive (the `??` must not clobber it).
+describe('mergePrefs showProjection (hand-calculated)', () => {
+  it('defaults showProjection to true when nothing is saved', () => {
+    expect(mergePrefs(null).showProjection).toBe(true);
+    expect(mergePrefs({}).showProjection).toBe(true);
+    expect(DEFAULT_PREFS.showProjection).toBe(true);
+  });
+
+  it('preserves an explicit false through a round-trip (no ?? clobber)', () => {
+    expect(mergePrefs({ showProjection: false }).showProjection).toBe(false);
+  });
+
+  it('preserves an explicit true', () => {
+    expect(mergePrefs({ showProjection: true }).showProjection).toBe(true);
   });
 });

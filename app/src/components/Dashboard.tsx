@@ -94,7 +94,11 @@ export function Dashboard() {
   // dashed line connects to the solid history. It deliberately ignores the date
   // range (a forward projection is always shown in full). Charts that don't
   // declare a proj* series drop these rows via their own filter.
-  const season = ov?.seasonProjection ?? null;
+  // The showProjection display pref (issue #69) gates the whole feature: when off,
+  // `season` is null, which empties forwardRows/withForward (no dashed series on
+  // the cost/usage charts) AND hides the "Proj. next 12 mo" card (it's rendered
+  // from `season ? (...)`).
+  const season = prefs.showProjection ? (ov?.seasonProjection ?? null) : null;
   const forwardRows: MonthRow[] = season ? seasonForwardRows(season) : [];
   const withForward = (base: MonthRow[]): MonthRow[] => {
     if (!forwardRows.length) return base;
