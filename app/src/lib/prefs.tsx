@@ -25,6 +25,10 @@ export interface Prefs {
   range: RangePref;
   currencyDecimals: number;
   density: Density;
+  // Show the seasonal 12-month forward projection (issue #52) — the dashed
+  // forward series on the cost & usage charts and the "Proj. next 12 mo" card.
+  // Default on (current behavior); issue #69 lets the operator hide it.
+  showProjection: boolean;
   order: string[];
   charts: Record<string, ChartConfig>;
   // The account the dashboard is scoped to. null = the default account (and the
@@ -47,6 +51,7 @@ export const DEFAULT_PREFS: Prefs = {
   range: DEFAULT_RANGE,
   currencyDecimals: 2,
   density: 'fit',
+  showProjection: true,
   selectedAccountId: null,
   order: CHART_SPECS.map((s) => s.id),
   charts: {
@@ -71,6 +76,8 @@ export function mergePrefs(saved: (Partial<Prefs> & { rangeMonths?: number }) | 
     range: mergeRange(saved),
     currencyDecimals: saved.currencyDecimals ?? DEFAULT_PREFS.currencyDecimals,
     density: saved.density === 'comfortable' || saved.density === 'fit' ? saved.density : DEFAULT_PREFS.density,
+    // ?? (not ||) so an explicit `false` survives a round-trip; only null/undefined fall through.
+    showProjection: saved.showProjection ?? DEFAULT_PREFS.showProjection,
     selectedAccountId: saved.selectedAccountId ?? DEFAULT_PREFS.selectedAccountId,
     order: mergeOrder(saved.order, DEFAULT_PREFS.order),
     charts,

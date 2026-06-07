@@ -167,6 +167,21 @@ export function SettingsView() {
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-slate-200">12-month projection</div>
+            <div className="text-xs text-slate-500">Show the projected next-12-months series on the cost &amp; usage charts</div>
+          </div>
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-700">
+            {([true, false] as const).map((on) => (
+              <button key={String(on)} onClick={() => patch({ showProjection: on })}
+                className={`px-3 py-1 text-xs transition ${prefs.showProjection === on ? 'bg-amber-500 text-slate-950' : 'bg-slate-800/50 text-slate-300 hover:bg-slate-700'}`}>
+                {on ? 'On' : 'Off'}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div>
           <div className="text-sm font-medium text-slate-200">Charts shown &amp; order</div>
           <div className="mb-2 text-xs text-slate-500">Toggle visibility and reorder the dashboard charts (customize each chart&apos;s series, type, and axes from its <span className="text-slate-300">Customize</span> button on the dashboard)</div>
