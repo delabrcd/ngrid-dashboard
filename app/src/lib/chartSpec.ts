@@ -19,6 +19,10 @@ export interface MonthRow {
   gasRateAllIn: number | null;
   avgTemp: number | null;
   billTotal: number | null;
+  // Length of the bill period in days, inclusive ((periodTo - periodFrom) + 1).
+  // Null when either period bound is missing. Used by the per-component
+  // fixed-$/day + variable-$/unit rate model (issue #67); not charted.
+  days: number | null;
   // Weather normalization (issue #5). hdd/cdd are summed over the bill period;
   // the *PerDegreeDay rates divide usage by degree-days (see series.ts for the
   // exact definitions). All null when the inputs are missing.

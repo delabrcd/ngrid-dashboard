@@ -9,11 +9,12 @@ import { monthlyTempByYm } from '@/lib/weather/monthlyTemp';
 import { getSetting } from '@/lib/settings';
 import {
   estimateNextBill,
+  estimateNextBillSeasonal,
   projectSeason,
   type SeasonProjection,
 } from '@/lib/prediction';
 import { trailing12AllIn } from '@/lib/series';
-import { seasonNormalsByMonth } from '@/lib/weather/expectedDegreeDaysSync';
+import { seasonNormalsByMonth, nextBillWindowDegreeDays } from '@/lib/weather/expectedDegreeDaysSync';
 import { shapeAccount, type AccountSummary } from '@/lib/accountSwitcher';
 import { ymFromDate as ymOf, isoDate as ymd } from '@/lib/ym';
 import type { Bill } from '@prisma/client';
@@ -22,6 +23,15 @@ import type { Bill } from '@prisma/client';
 // degree-day window fallback when a bill is missing periodFrom/periodTo.
 const monthStart = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 const monthEnd = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+
+// Inclusive bill-period length in days ((periodTo - periodFrom) + 1), or null
+// when either bound is missing. Used to populate MonthRow.days for the #67 rate
+// model's fixed-$/day term.
+const DAY_MS = 24 * 60 * 60 * 1000;
+function billDays(from: Date | null, to: Date | null): number | null {
+  if (!from || !to) return null;
+  return Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1;
+}
 
 export type { MonthRow };
 
@@ -131,7 +141,13 @@ export async function getMonthlySeries(accountId: number): Promise<MonthRow[]> {
     weather: [...tempByYm].map(([ym, avgTemperature]) => ({ ym, avgTemperature })),
     // Use the bill PDF's current charges (this period's energy cost) for analysis,
     // falling back to the API amount due only if a PDF wasn't parsed.
-    bills: bills.map((b) => ({ ym: ymOf(b.statementDate), totalDueAmount: b.currentCharges ?? b.totalDueAmount })),
+    bills: bills.map((b) => ({
+      ym: ymOf(b.statementDate),
+      totalDueAmount: b.currentCharges ?? b.totalDueAmount,
+      // Bill period length in days (inclusive); null when a period bound is
+      // missing. Feeds the per-component fixed-$/day rate model (issue #67).
+      days: billDays(b.periodFrom, b.periodTo),
+    })),
     degreeDays,
   });
 }
@@ -180,10 +196,20 @@ export async function getOverview(accountId: number) {
   // Lifetime energy spend = sum of each period's actual charges (not statement
   // amounts due, which would double-count any carried-over balances).
   const lifetimeSpend = bills.reduce((s, b) => s + (shapeBill(b).totalDueAmount ?? 0), 0);
-  // Estimated cost of the next bill (issue #9): the plain calendar estimate from
-  // recent period costs. PDF-sourced; an estimate, never stored and never fed to
+  // Estimated cost of the next bill. Prefer the seasonal Kalman-filter model
+  // (issue #67): weather-normal usage × per-component Kalman-filtered
+  // fixed+variable rates, which roughly halves the calendar method's error on
+  // the real account. It needs the predicted next-bill window's degree-days
+  // (forecast + normals, assembled impurely here) and ~18 usable bills; when those
+  // aren't available it falls back to the plain calendar estimate (issue #9). Both
+  // are PDF-sourced (currentCharges) estimates, never stored, never fed to
   // /api/verify.
-  const nextBillEstimate = estimateNextBill(series);
+  const baseSetting = await getSetting('degreeDayBaseF');
+  const parsedBase = Number.parseFloat(baseSetting ?? '');
+  const baseF = Number.isFinite(parsedBase) ? parsedBase : 65;
+  const nextWindow = await nextBillWindowDegreeDays(accountId, baseF);
+  const nextBillEstimate =
+    estimateNextBillSeasonal(series, nextWindow ?? undefined) ?? estimateNextBill(series);
   // Seasonal 12-month projection (issue #52): per-month projected cost + an annual
   // total, both with horizon-widening bands. Climatological PROJECTION (degree-day
   // normals × all-in rates), never a forecast; never stored.

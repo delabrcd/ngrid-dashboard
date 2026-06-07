@@ -7,7 +7,7 @@ import { ymLabel } from './ym';
 export interface UsageInput { periodYearMonth: number; usageType: string; quantity: number }
 export interface CostInput { periodYearMonth: number; fuelType: string; kind: string; amount: number }
 export interface WeatherInput { ym: number; avgTemperature: number }
-export interface BillInput { ym: number; totalDueAmount: number | null }
+export interface BillInput { ym: number; totalDueAmount: number | null; days?: number | null }
 // Degree-days already summed (per bill period) by the caller, keyed to the same
 // `ym` the rest of the pipeline uses (ymOf(statementDate)).
 export interface DegreeDayInput { ym: number; hdd: number; cdd: number }
@@ -34,7 +34,7 @@ export function deriveMonthlySeries(input: SeriesInput): MonthRow[] {
         elecSupply: null, gasSupply: null, elecDelivery: null, gasDelivery: null,
         elecBill: null, gasBill: null,
         elecRateSupply: null, gasRateSupply: null, elecRateAllIn: null, gasRateAllIn: null,
-        avgTemp: null, billTotal: null,
+        avgTemp: null, billTotal: null, days: null,
         hdd: null, cdd: null, kwhPerDegreeDay: null, thermsPerHdd: null,
       };
       months.set(ym, r);
@@ -56,7 +56,11 @@ export function deriveMonthlySeries(input: SeriesInput): MonthRow[] {
     else if (c.kind === 'DELIVERY') elec ? (r.elecDelivery = c.amount) : (r.gasDelivery = c.amount);
   }
   for (const w of input.weather) get(w.ym).avgTemp = w.avgTemperature;
-  for (const b of input.bills) if (b.totalDueAmount != null) get(b.ym).billTotal = b.totalDueAmount;
+  for (const b of input.bills) {
+    const r = get(b.ym);
+    if (b.totalDueAmount != null) r.billTotal = b.totalDueAmount;
+    if (b.days != null) r.days = b.days;
+  }
   for (const d of input.degreeDays ?? []) {
     const r = get(d.ym);
     r.hdd = d.hdd;

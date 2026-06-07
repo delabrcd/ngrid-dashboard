@@ -51,6 +51,7 @@ function row(over: Partial<MonthRow>): MonthRow {
     gasRateAllIn: null,
     avgTemp: null,
     billTotal: null,
+    days: null,
     hdd: null,
     cdd: null,
     kwhPerDegreeDay: null,

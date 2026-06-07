@@ -87,7 +87,7 @@ const mkRow = (over: Partial<MonthRow>): MonthRow => ({
   elecSupply: null, gasSupply: null, elecDelivery: null, gasDelivery: null,
   elecBill: null, gasBill: null,
   elecRateSupply: null, gasRateSupply: null, elecRateAllIn: null, gasRateAllIn: null,
-  avgTemp: null, billTotal: null,
+  avgTemp: null, billTotal: null, days: null,
   hdd: null, cdd: null, kwhPerDegreeDay: null, thermsPerHdd: null, ...over,
 });
 
