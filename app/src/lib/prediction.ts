@@ -596,6 +596,7 @@ export function seasonForwardRows(projection: SeasonProjection): MonthRow[] {
     gasRateAllIn: null,
     avgTemp: null,
     billTotal: null,
+    days: null,
     hdd: null,
     cdd: null,
     kwhPerDegreeDay: null,
@@ -604,4 +605,290 @@ export function seasonForwardRows(projection: SeasonProjection): MonthRow[] {
     projKwh: m.projKwh,
     projTherms: m.projTherms,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Seasonal next-bill estimate (issue #67) — V3 + trailing bias correction
+//
+// A faithful TypeScript port of the proven Python POC (ngrid-poc-67). It beats
+// the calendar #9 estimate by ~2x on the real account (POC back-test: MAPE
+// 15.4%→7.8%, MAE $31→$16) using only production-realizable inputs. Three parts:
+//
+//   1. WEATHER-AWARE USAGE. Per-fuel OLS of usage vs degree-days (the #44 fit,
+//      reused here), projected onto the predicted next-bill window's degree-days
+//      (forecast + climatological normals, assembled impurely and passed in via
+//      opts.target). This is the same projection projectSeason() makes for its
+//      first forward month.
+//   2. PER-COMPONENT RATE = fixed $/day + variable $/unit, fit SEPARATELY for
+//      each of the four components (electric supply, electric delivery, gas
+//      supply, gas delivery) by a 2-parameter OLS  amount ≈ fixed·days + rate·
+//      usage on the most recent `levelMonths` bills (all seasons). This is the
+//      structural fix: it correctly prices near-zero-usage summer gas delivery
+//      as mostly its fixed customer charge, where a flat $/therm fails. NO
+//      seasonal multiplier (the POC proved it over-corrects). Degenerate fits
+//      (negative fixed or rate) fall back to a mean $/unit, exactly like the POC.
+//   3. TRAILING BIAS CORRECTION. predicted = raw_model(next) + mean of the last
+//      `biasK` residuals, where each residual is (actual_i − raw_model trained
+//      ONLY on bills before i). Pure walk-forward, no leakage. Removes the
+//      residual structural under-bias (rate trend).
+//
+// The bill total is the sum of the four component predictions (each fixed·days +
+// rate·usage) plus the bias term — the POC verified the four components sum to
+// currentCharges. Everything here is PURE: the impure target-window degree-day
+// assembly (forecast + normals) and the rate inputs are passed in by the caller.
+//
+// For the WALK-FORWARD residuals we price each historical bill from its OWN
+// actual period degree-days (already on the MonthRow as hdd/cdd) and its own
+// days — the POC showed actual-weather and normal-weather back-tests give
+// essentially the same error (the "ceiling" row in FINDINGS), so this keeps the
+// function self-contained without recomputing per-window normals.
+//
+// Falls back to estimateNextBill (#9) — the caller does this — when there isn't
+// enough data: fewer than MIN_SEASONAL_BILLS usable bills, the four components /
+// degree-days are missing, or no target-window degree-days were supplied.
+// ---------------------------------------------------------------------------
+
+// Default recent-rate-level window (months/bills) for the component rate fits.
+// The POC swept 4/6/8/10/12/16 and found 6 the sweet spot (4 noisy, 12+ stale).
+export const DEFAULT_LEVEL_MONTHS = 6;
+// Trailing window for the bias correction (POC make_chart.py uses K=6).
+export const DEFAULT_BIAS_K = 6;
+// Minimum usable bills before we trust the seasonal model; below this the caller
+// falls back to #9. The POC's walk-forward used min_train = 18.
+export const MIN_SEASONAL_BILLS = 18;
+
+// The four cost components, each paired with the usage column that drives it.
+export type ComponentPick =
+  | { usage: 'kwh'; comp: 'elecSupply' }
+  | { usage: 'kwh'; comp: 'elecDelivery' }
+  | { usage: 'therms'; comp: 'gasSupply' }
+  | { usage: 'therms'; comp: 'gasDelivery' };
+
+export const COMPONENT_PICKS: ComponentPick[] = [
+  { usage: 'kwh', comp: 'elecSupply' },
+  { usage: 'kwh', comp: 'elecDelivery' },
+  { usage: 'therms', comp: 'gasSupply' },
+  { usage: 'therms', comp: 'gasDelivery' },
+];
+
+// A component's decomposed price: a fixed daily charge plus a variable per-unit
+// rate, so amount ≈ fixedPerDay·days + rate·usage.
+export interface ComponentRate {
+  fixedPerDay: number;
+  rate: number;
+}
+
+// Solve the 2-parameter no-intercept OLS  y ≈ b0·x0 + b1·x1 by the normal
+// equations (XᵀX)β = Xᵀy via Cramer's rule on the 2×2 — matching numpy's
+// lstsq for a two-column design. Returns null when the system is singular
+// (near-zero determinant: the two columns are collinear / no usable variance).
+const OLS2_DET_EPS = 1e-9;
+function ols2(x0: number[], x1: number[], y: number[]): { b0: number; b1: number } | null {
+  let s00 = 0, s01 = 0, s11 = 0, s0y = 0, s1y = 0;
+  for (let i = 0; i < y.length; i++) {
+    s00 += x0[i] * x0[i];
+    s01 += x0[i] * x1[i];
+    s11 += x1[i] * x1[i];
+    s0y += x0[i] * y[i];
+    s1y += x1[i] * y[i];
+  }
+  const det = s00 * s11 - s01 * s01;
+  if (Math.abs(det) <= OLS2_DET_EPS) return null;
+  const b0 = (s0y * s11 - s1y * s01) / det;
+  const b1 = (s00 * s1y - s01 * s0y) / det;
+  return { b0, b1 };
+}
+
+// Fit one cost component's price as fixed $/day + variable $/unit, on the most
+// recent `levelMonths` bills that carry the component, its usage AND a period
+// length (days). Mirrors the POC's component_rate_v3 (level_months=6):
+//   amount ≈ fixedPerDay·days + rate·usage   (2-param OLS, no intercept)
+// Guard against a degenerate fit (negative fixed or rate, or a singular system)
+// by falling back to a mean $/unit with the residual spread as the fixed floor —
+// exactly the POC's fallback. Rows missing `days` are skipped (the fixed term is
+// meaningless without a period length). Returns null when fewer than 3 usable
+// bills remain, so the caller can bail to #9.
+export function fitComponentRate(
+  rows: MonthRow[],
+  pick: ComponentPick,
+  levelMonths = DEFAULT_LEVEL_MONTHS
+): ComponentRate | null {
+  const usable = rows.filter(
+    (r) => r[pick.usage] != null && r[pick.comp] != null && r.days != null && r.days > 0
+  );
+  if (usable.length < 3) return null;
+  const sub = usable.slice(-levelMonths);
+  if (sub.length < 3) return null;
+
+  const days = sub.map((r) => r.days as number);
+  const usage = sub.map((r) => r[pick.usage] as number);
+  const amount = sub.map((r) => r[pick.comp] as number);
+
+  const fit = ols2(days, usage, amount);
+  let fixedPerDay = fit?.b0 ?? -1;
+  let rate = fit?.b1 ?? -1;
+
+  if (!fit || rate < 0 || fixedPerDay < 0 || !Number.isFinite(rate) || !Number.isFinite(fixedPerDay)) {
+    // Degenerate fit -> fall back to mean $/unit, fixed = leftover / total days.
+    const totalUse = usage.reduce((a, b) => a + b, 0);
+    const totalAmt = amount.reduce((a, b) => a + b, 0);
+    const totalDays = days.reduce((a, b) => a + b, 0);
+    rate = totalUse > 5 ? Math.max(0, totalAmt / totalUse) : 0;
+    fixedPerDay = totalDays > 0 ? Math.max(0, (totalAmt - rate * totalUse) / totalDays) : 0;
+  }
+  return { fixedPerDay: Math.max(0, fixedPerDay), rate: Math.max(0, rate) };
+}
+
+// Project per-fuel usage for a target window from the #44 degree-day fit, applied
+// to the window's degree-days. Returns null when the fuel's fit is unusable.
+function projectUsageForWindow(
+  fit: UsageFit,
+  target: ExpectedDegreeDays
+): number | null {
+  if (!fit.ok) return null;
+  return Math.max(0, fit.base + fit.slopeC * target.cdd + fit.slopeH * target.hdd);
+}
+
+// The RAW (pre-bias) seasonal bill for a target window: weather-aware usage ×
+// per-component fixed/day + variable rates, summed over the four components.
+// Returns null when usage can't be projected for either fuel or any component
+// rate can't be fit. PURE.
+function rawSeasonalBill(
+  trainRows: MonthRow[],
+  target: ExpectedDegreeDays,
+  targetDays: number,
+  levelMonths: number
+): number | null {
+  const fits = fitUsageVsDegreeDays(trainRows);
+  const kwh = projectUsageForWindow(fits.elec, target);
+  const therms = projectUsageForWindow(fits.gas, target);
+  if (kwh == null || therms == null) return null;
+
+  let total = 0;
+  for (const pick of COMPONENT_PICKS) {
+    const cr = fitComponentRate(trainRows, pick, levelMonths);
+    if (cr == null) return null;
+    const usageVal = pick.usage === 'kwh' ? kwh : therms;
+    total += cr.fixedPerDay * targetDays + cr.rate * usageVal;
+  }
+  return total;
+}
+
+// A bill row is "usable" for the seasonal model when it carries everything the
+// raw model needs to be back-tested against: the four cost components, both
+// usages, degree-days, a period length, and the actual cost (currentCharges).
+function isSeasonalUsable(r: MonthRow): boolean {
+  return (
+    r.kwh != null &&
+    r.therms != null &&
+    r.hdd != null &&
+    r.cdd != null &&
+    r.days != null &&
+    r.days > 0 &&
+    r.billTotal != null &&
+    r.elecSupply != null &&
+    r.elecDelivery != null &&
+    r.gasSupply != null &&
+    r.gasDelivery != null
+  );
+}
+
+export interface SeasonalEstimateOpts {
+  // Expected degree-days for the predicted next-bill window (forecast + normals,
+  // assembled impurely by the caller). Without it the weather-aware projection
+  // can't run and the estimate returns null (caller falls back to #9).
+  target?: ExpectedDegreeDays;
+  // Length of the predicted next-bill window in days. Defaults to the median
+  // statement interval the caller already knows (~30 when unknown).
+  targetDays?: number;
+  levelMonths?: number; // recent-rate window for the component fits (default 6)
+  biasK?: number; // trailing residuals to average for the bias term (default 6)
+  bandStdevs?: number; // k: band half-width in stdevs of the residuals (default 1)
+}
+
+// Walk-forward residuals (actual − raw_model trained only on prior bills), in the
+// usable bills' chronological order. Each residual prices the bill from its OWN
+// actual period degree-days/days (already on the row). Returns the residual list;
+// the caller takes its trailing mean (bias) and stdev (band). PURE.
+export function trailingResiduals(
+  rows: MonthRow[],
+  levelMonths = DEFAULT_LEVEL_MONTHS
+): number[] {
+  const usable = rows.filter(isSeasonalUsable);
+  const residuals: number[] = [];
+  for (let i = MIN_SEASONAL_BILLS; i < usable.length; i++) {
+    const tg = usable[i];
+    const raw = rawSeasonalBill(
+      usable.slice(0, i),
+      { hdd: tg.hdd as number, cdd: tg.cdd as number, forecastDays: 0, normalDays: tg.days as number },
+      tg.days as number,
+      levelMonths
+    );
+    if (raw == null) continue;
+    residuals.push((tg.billTotal as number) - raw);
+  }
+  return residuals;
+}
+
+// The #67 seasonal next-bill estimate: weather-normal usage × per-component
+// fixed+variable rates (last `levelMonths` bills) + trailing bias correction.
+// Same { point, low, high, basis } shape as estimateNextBill. Returns null when
+// there isn't enough data or no target-window degree-days were supplied — the
+// caller then falls back to estimateNextBill (#9). PURE.
+export function estimateNextBillSeasonal(
+  rows: MonthRow[],
+  opts?: SeasonalEstimateOpts
+): NextBillEstimate | null {
+  const levelMonths = opts?.levelMonths ?? DEFAULT_LEVEL_MONTHS;
+  const biasK = opts?.biasK ?? DEFAULT_BIAS_K;
+  const k = opts?.bandStdevs ?? DEFAULT_BAND_STDEVS;
+  const target = opts?.target;
+  if (!target) return null; // no weather-aware window -> #9 fallback
+
+  const usable = rows.filter(isSeasonalUsable);
+  if (usable.length < MIN_SEASONAL_BILLS) return null;
+
+  const targetDays = opts?.targetDays ?? Math.round(predictNextBill(
+    usable.map((r) => new Date(Date.UTC(Math.floor(r.ym / 100), (r.ym % 100) - 1, 1)))
+  ).medianDays);
+
+  // Raw model trained on ALL usable bills.
+  const raw = rawSeasonalBill(usable, target, targetDays, levelMonths);
+  if (raw == null) return null;
+
+  // Trailing bias correction: mean of the last biasK walk-forward residuals.
+  const residuals = trailingResiduals(rows, levelMonths);
+  const tail = residuals.slice(-biasK);
+  const bias = tail.length ? tail.reduce((a, b) => a + b, 0) / tail.length : 0;
+
+  const point = raw + bias;
+
+  // Band from the spread of the trailing residuals (±k·σ); fall back to the
+  // spread of recent period costs, then ±15% — the same ladder #9 uses.
+  let half: number;
+  let bandNote: string;
+  const residStdev = sampleStdev(residuals);
+  if (residStdev != null) {
+    half = k * residStdev;
+    bandNote = `±${k}σ of back-test residuals`;
+  } else {
+    const recentCosts = rows
+      .filter((r) => r.billTotal != null)
+      .slice(-DEFAULT_TRAILING)
+      .map((r) => r.billTotal as number);
+    const costStdev = sampleStdev(recentCosts);
+    if (costStdev != null) {
+      half = k * costStdev;
+      bandNote = `±${k}σ of recent costs`;
+    } else {
+      half = DEFAULT_BAND_PCT * point;
+      bandNote = `±${Math.round(DEFAULT_BAND_PCT * 100)}%`;
+    }
+  }
+
+  const low = Math.max(0, point - half);
+  const high = point + half;
+  const basis = `weather-normal usage; per-component fixed+variable rates (last ${levelMonths} bills); bias-corrected; ${bandNote}`;
+
+  return { point, low, high, basis };
 }

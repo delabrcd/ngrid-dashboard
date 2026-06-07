@@ -33,6 +33,7 @@ function row(p: { ym: number; kwh?: number | null; therms?: number | null; billT
     elecRateAllIn: null, gasRateAllIn: null,
     avgTemp: null,
     billTotal: p.billTotal ?? null,
+    days: null,
     hdd: null, cdd: null, kwhPerDegreeDay: null, thermsPerHdd: null,
   };
 }

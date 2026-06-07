@@ -16,7 +16,7 @@ const mk = (p: Partial<MonthRow> & { ym: number }): MonthRow => ({
   elecSupply: null, gasSupply: null, elecDelivery: null, gasDelivery: null,
   elecBill: p.elecBill ?? null, gasBill: p.gasBill ?? null,
   elecRateSupply: null, gasRateSupply: null, elecRateAllIn: null, gasRateAllIn: null,
-  avgTemp: null, billTotal: p.billTotal ?? null,
+  avgTemp: null, billTotal: p.billTotal ?? null, days: p.days ?? null,
   hdd: p.hdd ?? null, cdd: p.cdd ?? null, kwhPerDegreeDay: null, thermsPerHdd: null,
 });
 
