@@ -141,11 +141,17 @@ jobs:
       DATABASE_URL: postgresql://ngrid:ci@localhost:5432/ngrid?schema=public
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags so the build can stamp a git-describe version
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Build the runner image (as shipped)
-        run: docker build -t ngrid-dashboard-boot ./app
+        # Stamp the same git-describe version the real edge/main build uses, so the
+        # boot-health summary shows a meaningful version (not 0.0.0-dev).
+        run: |
+          ver="$(git describe --tags --always | sed 's/^v//')"
+          docker build --build-arg APP_VERSION="$ver" -t ngrid-dashboard-boot ./app
 
       - name: Boot the image
         run: |
@@ -201,16 +207,11 @@ jobs:
           # earlier failure (build/boot/wait) leaves it '' — treat that as a fail.
           ASSERT_OUTCOME: ${{ steps.assert.outcome }}
         run: |
-          ver="$(docker inspect ngrid-dashboard-boot \
-            --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)"
-          # The local smoke-boot build doesn't carry the OCI version label (that's
-          # stamped by metadata-action at publish time), so fall back to the
-          # NEXT_PUBLIC_APP_VERSION baked into the image, then to "unknown".
-          if [ -z "$ver" ]; then
-            ver="$(docker inspect ngrid-dashboard-boot \
-              --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-              | sed -n 's/^NEXT_PUBLIC_APP_VERSION=//p' | head -1)"
-          fi
+          # Read the git-describe version stamped into package.json at build (the
+          # build step passes --build-arg APP_VERSION; the Dockerfile npm-pkg-sets it
+          # and copies package.json into the runner stage). Falls back to "unknown"
+          # if the container never came up.
+          ver="$(docker exec boot node -p "require('/app/package.json').version" 2>/dev/null || true)"
           [ -n "$ver" ] || ver="unknown"
           if [ "$ASSERT_OUTCOME" = "success" ]; then
             status="✓ healthy"
