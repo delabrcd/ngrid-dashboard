@@ -42,8 +42,26 @@ jobs:
       - name: Generate Prisma client (types for the typecheck)
         run: cd app && npx prisma generate
 
+      # Surface ESLint findings as GitHub annotations (inline on changed lines)
+      # via a self-contained problem matcher — no external action, no SARIF.
+      - name: Register ESLint problem matcher
+        run: echo "::add-matcher::.github/eslint-compact-matcher.json"
+
       - name: ESLint
-        run: cd app && npm run lint
+        # Compact formatter so the matcher can parse each finding. next lint emits
+        # absolute paths; rewrite them to workspace-relative so annotations land on
+        # the right file/line in the diff. Preserve eslint's exit code (still fails
+        # on ERRORS, passes on warnings) via PIPESTATUS — no --max-warnings added.
+        shell: bash
+        run: |
+          cd app
+          npm run lint -- --format compact \
+            | sed "s#${GITHUB_WORKSPACE}/##g"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Remove ESLint problem matcher
+        if: always()
+        run: echo "::remove-matcher owner=eslint-compact::"
 
       - name: Typecheck
         run: cd app && npx tsc --noEmit
@@ -139,10 +157,17 @@ jobs:
 
       - name: Wait for the server (entrypoint runs db push, then starts Next)
         run: |
+          start=$(date +%s)
           for i in $(seq 1 60); do
-            if curl -fsS -o /dev/null http://localhost:3000/; then echo "server up"; exit 0; fi
+            if curl -fsS -o /dev/null http://localhost:3000/; then
+              waited=$(( $(date +%s) - start ))
+              echo "server up after ${waited}s"
+              echo "BOOT_WAIT_SECONDS=${waited}" >> "$GITHUB_ENV"
+              exit 0
+            fi
             sleep 3
           done
+          echo "BOOT_WAIT_SECONDS=timeout" >> "$GITHUB_ENV"
           echo "::error::server never started (root / not 200)"; docker logs boot | tail -80; exit 1
 
       - name: Seed representative data
@@ -150,17 +175,61 @@ jobs:
         run: psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f .github/migration-safety/seed.sql
 
       - name: Assert /api/overview is healthy and serves data
+        id: assert
         run: |
-          code="$(curl -s -o /tmp/ov.json -w '%{http_code}' http://localhost:3000/api/overview)"
-          echo "HTTP $code"; cat /tmp/ov.json | head -c 400; echo
+          out="$(curl -s -o /tmp/ov.json -m 30 -w '%{http_code} %{time_total}' http://localhost:3000/api/overview)"
+          set -- $out; code="$1"; rt="$2"
+          echo "HTTP $code (${rt}s)"; cat /tmp/ov.json | head -c 400; echo
+          # Stash facts for the step summary (consumed by the always() summary step).
+          echo "OV_HTTP_CODE=${code}" >> "$GITHUB_ENV"
+          echo "OV_RESPONSE_SECONDS=${rt}" >> "$GITHUB_ENV"
           if [ "$code" != "200" ]; then
+            echo "OV_BILL_COUNT=n/a" >> "$GITHUB_ENV"
             echo "::error::/api/overview returned $code (app not healthy)"; docker logs boot | tail -80; exit 1
           fi
           bills="$(python3 -c 'import json;print(json.load(open("/tmp/ov.json")).get("billCount",0))')"
+          echo "OV_BILL_COUNT=${bills}" >> "$GITHUB_ENV"
           if [ "${bills:-0}" -lt 1 ]; then
             echo "::error::/api/overview returned 200 but no data (billCount=$bills) — DB/query path unhealthy"; docker logs boot | tail -80; exit 1
           fi
           echo "healthy: /api/overview 200 with billCount=$bills"
+
+      - name: Boot-health summary
+        if: always()
+        env:
+          # steps.assert.outcome is 'success' only if the assert step passed; any
+          # earlier failure (build/boot/wait) leaves it '' — treat that as a fail.
+          ASSERT_OUTCOME: ${{ steps.assert.outcome }}
+        run: |
+          ver="$(docker inspect ngrid-dashboard-boot \
+            --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)"
+          # The local smoke-boot build doesn't carry the OCI version label (that's
+          # stamped by metadata-action at publish time), so fall back to the
+          # NEXT_PUBLIC_APP_VERSION baked into the image, then to "unknown".
+          if [ -z "$ver" ]; then
+            ver="$(docker inspect ngrid-dashboard-boot \
+              --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+              | sed -n 's/^NEXT_PUBLIC_APP_VERSION=//p' | head -1)"
+          fi
+          [ -n "$ver" ] || ver="unknown"
+          if [ "$ASSERT_OUTCOME" = "success" ]; then
+            status="✓ healthy"
+          else
+            status="✗ unhealthy"
+          fi
+          {
+            echo "## Boot-health smoke test"
+            echo ""
+            echo "**${status}**"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| App version | \`${ver}\` |"
+            echo "| \`/api/overview\` HTTP | \`${OV_HTTP_CODE:-n/a}\` |"
+            echo "| billCount | \`${OV_BILL_COUNT:-n/a}\` |"
+            echo "| Boot wait (s) | \`${BOOT_WAIT_SECONDS:-n/a}\` |"
+            echo "| \`/api/overview\` response (s) | \`${OV_RESPONSE_SECONDS:-n/a}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Container logs (always)
         if: always()
