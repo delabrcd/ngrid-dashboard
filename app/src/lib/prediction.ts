@@ -227,10 +227,10 @@ export function estimateNextBill(rows: MonthRow[], opts?: EstimateOpts): NextBil
 
   // Describe the projection basis per fuel so the UI can caption it honestly.
   const parts: string[] = [];
-  if (elecCost != null) parts.push(`electric ${elecUse!.usedLastYear ? 'same month last year' : `trailing ${trailing}-mo avg`}`);
-  if (gasCost != null) parts.push(`gas ${gasUse!.usedLastYear ? 'same month last year' : `trailing ${trailing}-mo avg`}`);
-  const bandNote = stdev != null ? `±1σ of recent costs` : `±${Math.round(DEFAULT_BAND_PCT * 100)}%`;
-  const basis = `${parts.join(', ')}; current 12-mo all-in rates; ${bandNote}`;
+  if (elecCost != null) parts.push(`electricity from ${elecUse!.usedLastYear ? 'the same month last year' : `your last ${trailing} months`}`);
+  if (gasCost != null) parts.push(`gas from ${gasUse!.usedLastYear ? 'the same month last year' : `your last ${trailing} months`}`);
+  const bandNote = stdev != null ? `how much your recent bills varied` : `a ±${Math.round(DEFAULT_BAND_PCT * 100)}% range`;
+  const basis = `${parts.join(' and ')} at your typical rate (${bandNote})`;
 
   return { point, low, high, basis };
 }
@@ -611,13 +611,13 @@ export function projectSeason(
   if (annualHalf <= 0) annualHalf = DEFAULT_BAND_PCT * point;
 
   const rateNote = useComponents
-    ? 'per-component Kalman fixed+variable rates'
-    : 'current 12-mo all-in rates';
+    ? 'your recent rates'
+    : 'your typical rate';
   const basis = anyFit
-    ? `12-month climatological projection from degree-day normals; ${rateNote}${
-        anyFallback ? '; some months fell back to same-month-last-year usage' : ''
+    ? `a typical year's weather and ${rateNote}${
+        anyFallback ? ', with some months based on the same month last year' : ''
       }`
-    : `same-month-last-year usage at ${rateNote} (climatological fallback)`;
+    : `the same months last year and ${rateNote}`;
 
   return {
     months,
@@ -1019,7 +1019,7 @@ export function estimateNextBillSeasonal(
   const residStdev = sampleStdev(residuals);
   if (residStdev != null) {
     half = k * residStdev;
-    bandNote = `±${k}σ of back-test residuals`;
+    bandNote = `how accurate past estimates have been`;
   } else {
     const recentCosts = rows
       .filter((r) => r.billTotal != null)
@@ -1028,16 +1028,16 @@ export function estimateNextBillSeasonal(
     const costStdev = sampleStdev(recentCosts);
     if (costStdev != null) {
       half = k * costStdev;
-      bandNote = `±${k}σ of recent costs`;
+      bandNote = `how much your recent bills varied`;
     } else {
       half = DEFAULT_BAND_PCT * point;
-      bandNote = `±${Math.round(DEFAULT_BAND_PCT * 100)}%`;
+      bandNote = `a ±${Math.round(DEFAULT_BAND_PCT * 100)}% range`;
     }
   }
 
   const low = Math.max(0, point - half);
   const high = point + half;
-  const basis = `weather-normal usage; per-component Kalman-filtered fixed+variable rates; ${bandNote}`;
+  const basis = `your weather-adjusted usage and recent rates (${bandNote})`;
 
   return { point, low, high, basis };
 }

@@ -24,8 +24,10 @@ import { ScrapeProgressBanner } from './ScrapeProgress';
 import { RangeControl } from './RangeControl';
 import { NgLoginsSection } from './NgLoginsSection';
 import { CockpitPager } from './CockpitPager';
+import { ToolsModal, type ToolsTab } from './ToolsModal';
+import { NotificationsBell } from './NotificationsBell';
 import { useDashboardData } from './useDashboardData';
-import { dateLabel, estimateTooltip, num, rate, relativeFromNow, usd } from '@/lib/format';
+import { dateLabel, estimateTooltip, num, rate, relativeFromNow, signedPct, usd } from '@/lib/format';
 
 // Up to four charts per page in the paginated "fit" cockpit (issue #38), laid out
 // 2×2 so each chart is comfortably tall on a laptop.
@@ -94,13 +96,13 @@ export function Dashboard() {
   // dashed line connects to the solid history. It deliberately ignores the date
   // range (a forward projection is always shown in full). Charts that don't
   // declare a proj* series drop these rows via their own filter.
-  // The projection display prefs (issue #71) gate the feature in two independent
-  // halves: `seasonCharts` drives the dashed forward series + per-chart spec
-  // filtering, while `seasonCard` drives the "Proj. next 12 mo" summary card.
-  // Either being null means that half is hidden (the `?? null` also covers the
-  // case where the server simply has no projection to show).
+  // The chart-projection pref (issue #71) gates the dashed forward series + the
+  // per-chart spec filtering. (The old "Proj. next 12 mo" summary card, gated by
+  // the separate showProjectionCard pref, was merged into the Budget card → Budget
+  // tab — its annual total now lives in that tool, always available regardless of
+  // this chart toggle.) null means the series is hidden (the `?? null` also covers
+  // the case where the server simply has no projection to show).
   const seasonCharts = prefs.showProjectionOnCharts ? (ov?.seasonProjection ?? null) : null;
-  const seasonCard = prefs.showProjectionCard ? (ov?.seasonProjection ?? null) : null;
   const forwardRows: MonthRow[] = seasonCharts ? seasonForwardRows(seasonCharts) : [];
   const withForward = (base: MonthRow[]): MonthRow[] => {
     if (!forwardRows.length) return base;
@@ -134,6 +136,54 @@ export function Dashboard() {
 
   const visibleCharts = prefs.order.filter((id) => prefs.charts[id]?.visible && SPEC_BY_ID[id]);
   const fit = prefs.density === 'fit';
+
+  // "vs last year (normalized)" card (issue #47). Latest-month-vs-same-month-a-
+  // year-ago, weather-normalized, per fuel — computed server-side (ov.latestYoy).
+  // We show whichever fuels have a result; the card self-hides only when neither
+  // fuel matched a prior-year month (like the other optional cards). The number
+  // shown is the normalized (intensity) change, the honest "did I use less" figure.
+  const yoyCard = ov?.latestYoy ?? null;
+  const yoyCardFuels = yoyCard ? [yoyCard.elec, yoyCard.gas].filter((r) => r != null) : [];
+  const showYoyCard = yoyCardFuels.length > 0;
+  // Green/red tint for a normalized YoY delta: LOWER usage than last year is BETTER
+  // (emerald), higher is WORSE (rose), ~flat or null is neutral (slate). A tiny
+  // epsilon around 0 counts as flat. Matches the budget card's emerald/rose tokens
+  // and the Compare tool's normalized-cost coloring. Presentation only.
+  const yoyDeltaClass = (pct: number | null | undefined): string =>
+    pct == null || Math.abs(pct) < 0.005
+      ? 'text-slate-200'
+      : pct < 0
+        ? 'text-emerald-300'
+        : 'text-rose-300';
+
+  // Budget / annual-spend target card (issue #46). The redesign merges the old
+  // standalone Budget card AND the "Proj. next 12 mo" card into ONE compact,
+  // CLICKABLE Budget card: a concise projected-year-end / target headline + a
+  // seasonally-fair status, that opens the Tools modal's Budget tab (the
+  // month-by-month detail + projection context). Always-visible when a target is
+  // set; a subtle "set a budget" affordance covers the no-target case. The
+  // arithmetic happened server-side (ov.budget); this only renders the headline.
+  const budget = ov?.budget ?? null;
+
+  // Header notifications bell (notification-log feature). The old inline amber
+  // anomaly banner (#45) is superseded by a dropdown over the persistent
+  // SERVER-SIDE notification log — the SAME events the email/webhook/ntfy channels
+  // send: usage/cost anomalies (#45) AND new-bill alerts (#7). The bell fetches its
+  // own log (GET /api/notifications, scoped to the selected account) with read/
+  // unread and a "hide read" filter, so the dashboard no longer derives or passes
+  // the items in. We still hand it the loaded bills for the new-bill detail's PDF
+  // link.
+
+  // On-demand Tools modal (UX refactor): the interactive Compare-periods (#47) and
+  // Supply what-if (#48) tools no longer sit always-visible below the strip — they
+  // live in a centered modal opened by the header "Tools" button or the
+  // vs-last-year card. `toolsTab` is the tab to open to (the card opens Compare).
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [toolsTab, setToolsTab] = useState<ToolsTab>('compare');
+  const openTools = (tab: ToolsTab) => {
+    setToolsTab(tab);
+    setToolsOpen(true);
+  };
 
   // Chart pagination (issue #38): in "fit" density at ≥xl we page through the
   // visible charts (in the user's chosen order) up to four at a time in a 2×2 grid
@@ -189,8 +239,8 @@ export function Dashboard() {
             </span>
           </div>
           <p className="mx-auto mt-2 max-w-prose text-sm text-slate-400">
-            Let&apos;s get set up. Add your National Grid login below — it&apos;s stored encrypted (AES-256-GCM) and used
-            only to scrape your own account&apos;s bills and usage. Adding it runs a real login to verify it; if National
+            Let&apos;s get set up. Add your National Grid login below — it&apos;s stored securely (encrypted) and used
+            only to pull your own account&apos;s bills and usage. Adding it signs in once to check it works; if National
             Grid sends a one-time code you&apos;ll be asked for it here.
           </p>
         </header>
@@ -268,6 +318,32 @@ export function Dashboard() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Notifications bell (notifications-dropdown feature): the in-app mirror
+              of the email/webhook/ntfy alerts — anomalies (#45) + new-bill (#7) —
+              with an unread-count badge and a dismissable dropdown. Hidden until
+              there's data (and thus a possible bill/anomaly) to surface. */}
+          {!empty && (
+            <NotificationsBell
+              accountId={selectedAccountId}
+              bills={bills}
+              onOpenCompare={() => openTools('compare')}
+            />
+          )}
+          {/* Tools button (UX refactor): opens the interactive Compare / what-if
+              tools in an on-demand modal instead of cluttering the dashboard body.
+              Hidden until there's data to analyse. */}
+          {!empty && (
+            <button
+              type="button"
+              onClick={() => openTools('compare')}
+              className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.3 2.3a1.5 1.5 0 0 1-2.1-2.1z" />
+              </svg>
+              Tools
+            </button>
+          )}
           <Link href="/settings" className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700">
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="3" />
@@ -340,12 +416,13 @@ export function Dashboard() {
               the FILL_BODY_CLASSES height constant is tuned to this chrome.
               Comfortable density stays roomier. */}
           {/* lg column count tracks the number of cards actually rendered (issue
-              #71): 4 fixed + the optional est-next and proj cards. We map to an
-              explicit literal so the class string is visible to Tailwind's JIT. */}
+              #71): 4 fixed + the optional est-next, proj, carbon and vs-last-year
+              cards. We map to an explicit literal so the class string is visible to
+              Tailwind's JIT. */}
           <div
             className={`grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 ${
-              { 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' }[
-                4 + (ov?.nextBillEstimate ? 1 : 0) + (seasonCard ? 1 : 0)
+              { 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6', 7: 'lg:grid-cols-7', 8: 'lg:grid-cols-8', 9: 'lg:grid-cols-9' }[
+                4 + (ov?.nextBillEstimate ? 1 : 0) + (ov?.emissions ? 1 : 0) + (showYoyCard ? 1 : 0) + (budget ? 1 : 0)
               ]
             } ${
               fit
@@ -366,12 +443,12 @@ export function Dashboard() {
             <div className="card !p-3">
               <div className="card-title text-xs">Electric rate</div>
               <div className="stat text-2xl">{rate(elecAllIn)}<span className="text-sm text-slate-500">/kWh</span></div>
-              <div className="sub mt-0.5 text-[11px] text-slate-500">12-mo all-in · supply {rate(lastRow?.elecRateSupply)}</div>
+              <div className="sub mt-0.5 text-[11px] text-slate-500">full price, last 12 mo · supply part {rate(lastRow?.elecRateSupply)}</div>
             </div>
             <div className="card !p-3">
               <div className="card-title text-xs">Gas rate</div>
               <div className="stat text-2xl">{rate(gasAllIn, 2)}<span className="text-sm text-slate-500">/therm</span></div>
-              <div className="sub mt-0.5 text-[11px] text-slate-500">12-mo all-in · supply {rate(lastRow?.gasRateSupply, 2)}</div>
+              <div className="sub mt-0.5 text-[11px] text-slate-500">full price, last 12 mo · supply part {rate(lastRow?.gasRateSupply, 2)}</div>
             </div>
             {ov?.nextBillEstimate ? (
               // Compact estimate card (issue #38): just "Est. next bill", "~$X" and
@@ -397,31 +474,173 @@ export function Dashboard() {
                 </div>
               </div>
             ) : null}
-            {/* Annual-total readout (issue #52): the sum of the next 12 projected
-                bill periods, with its combined band. Clearly labelled a
-                climatological PROJECTION, not a forecast — the verbose basis lives
-                behind the ⓘ tooltip so the word "projection" appears once. */}
-            {seasonCard ? (
+            {/* The "Proj. next 12 mo" card was merged into the Budget card → Budget
+                tab (issue #46 redesign): the next-12-months projected total now
+                lives inside that tool as projection context, so it isn't lost. The
+                dashed forward chart series is unaffected (gated separately by the
+                showProjectionOnCharts pref). */}
+            {/* Carbon-footprint estimate (issue #49): trailing-12 combined CO2e in
+                kg, with a friendly equivalence and the location-based-ESTIMATE
+                caveat behind the ⓘ tooltip so the card stays compact. Never a
+                cost number. */}
+            {ov?.emissions ? (
               <div className="card relative !p-3">
                 <div className="card-title flex items-center gap-1 text-xs">
-                  Proj. next 12 mo
+                  Carbon (12 mo)
                   <span
                     tabIndex={0}
                     role="img"
-                    aria-label={`Climatological projection (degree-day normals × current all-in rates) for the next 12 bill periods — ${seasonCard.basis}. Not a forecast, not a real charge.`}
-                    title={`Climatological projection (degree-day normals × current all-in rates) for the next 12 bill periods — ${seasonCard.basis}. Not a forecast, not a real charge.`}
-                    className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-violet-500/60"
+                    aria-label="An estimate of the carbon emissions from your energy use, based on your electricity and gas and a regional grid average. It reflects the typical mix of power in your area, not your specific plan. You can set your own electricity factor in Settings if you're on a green plan."
+                    title="An estimate of the carbon emissions from your energy use, based on your electricity and gas and a regional grid average. It reflects the typical mix of power in your area, not your specific plan. You can set your own electricity factor in Settings if you're on a green plan."
+                    className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
                   >
                     i
                   </span>
                 </div>
-                <div className="stat text-2xl">~{usd(seasonCard.annual.point, 0)}</div>
+                <div className="stat text-2xl">~{num(Math.round(ov.emissions.totalKg))}<span className="text-sm text-slate-500"> kg CO₂e</span></div>
                 <div className="sub mt-0.5 text-[11px] text-slate-500">
-                  {usd(seasonCard.annual.low, 0)}–{usd(seasonCard.annual.high, 0)} · projection
+                  ≈ {num(Math.round(ov.emissions.gallonsGasoline))} gal gas · {num(Math.round(ov.emissions.treeYears))} tree-yrs · estimate
                 </div>
               </div>
             ) : null}
+            {/* vs-last-year (normalized) card (issue #47): the always-visible fix
+                for the old density-hidden YoyPanel. Shows the weather-normalized
+                usage change for the latest month vs the same calendar month a year
+                ago, per fuel ("Elec +2% · Gas −5%"). Renders in BOTH densities (it
+                lives in this shared top strip). The number is the honest normalized
+                (intensity) change; the full breakdown lives in the Compare tool
+                below. Self-hides when no fuel has a prior-year match. */}
+            {showYoyCard ? (
+              // Clickable: opens the Tools modal straight to the Compare-periods
+              // tab for the full breakdown. role=button + keyboard activation so
+              // it's reachable without a mouse.
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => openTools('compare')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openTools('compare');
+                  }
+                }}
+                className="card relative cursor-pointer !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+              >
+                <div className="card-title flex items-center gap-1 text-xs">
+                  vs last year
+                  <span
+                    tabIndex={0}
+                    role="img"
+                    aria-label="How your energy use this month compares to the same month a year ago, after accounting for how hot or cold it was. This tells you whether you actually used more or less — not just whether it was a warmer or colder month. Open the Compare tool for the full breakdown and other date ranges. Not a real charge."
+                    title="How your energy use this month compares to the same month a year ago, after accounting for how hot or cold it was. This tells you whether you actually used more or less — not just whether it was a warmer or colder month. Open the Compare tool for the full breakdown and other date ranges. Not a real charge."
+                    className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+                  >
+                    i
+                  </span>
+                </div>
+                <div className="stat flex items-baseline gap-2 text-2xl">
+                  {yoyCard?.elec ? (
+                    <span><span className="text-sm text-amber-400">Elec</span>{' '}
+                      <span className={yoyDeltaClass(yoyCard.elec.normalizedPct)}>{signedPct(yoyCard.elec.normalizedPct)}</span>
+                    </span>
+                  ) : null}
+                  {yoyCard?.gas ? (
+                    <span><span className="text-sm text-sky-400">Gas</span>{' '}
+                      <span className={yoyDeltaClass(yoyCard.gas.normalizedPct)}>{signedPct(yoyCard.gas.normalizedPct)}</span>
+                    </span>
+                  ) : null}
+                </div>
+                <div className="sub mt-0.5 text-[11px] text-slate-500">weather-adjusted vs last year · click to compare</div>
+              </div>
+            ) : null}
+            {/* Budget / annual-spend target (issue #46 redesign): the MERGED card.
+                Concise headline (projected year-end / target + a seasonally-fair
+                status) and a progress bar; CLICKABLE to open the Tools modal's
+                Budget tab with the month-by-month breakdown + projection context.
+                When NO target is set, a subtle "set a budget" affordance links to
+                Settings. The verbose detail lives in the tab; the ⓘ tooltip keeps
+                the disclaimer. All math is server-side (ov.budget). */}
+            {budget ? (() => {
+              const { spent, projected, projectedLow, projectedHigh, target, delta, status, window } = budget;
+              const statusColor =
+                status === 'over' ? 'text-rose-300' : status === 'under' ? 'text-emerald-300' : 'text-slate-200';
+              const statusLabel =
+                status === 'over' ? `over by ${usd(Math.abs(delta), 0)}`
+                  : status === 'under' ? `under by ${usd(Math.abs(delta), 0)}`
+                    : 'on track';
+              // Progress bar: spent (solid) + projected-remaining (lighter), as a
+              // fraction of max(target, projected) so an over-budget projection
+              // still fills the bar and overflows visibly into the rose tint.
+              const denom = Math.max(target, projected, 1);
+              const spentPct = Math.min(100, (spent / denom) * 100);
+              const remPct = Math.min(100 - spentPct, (Math.max(0, projected - spent) / denom) * 100);
+              const targetPct = Math.min(100, (target / denom) * 100);
+              const fromY = Math.floor(window.fromYm / 100);
+              return (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openTools('budget')}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openTools('budget');
+                    }
+                  }}
+                  className="card relative cursor-pointer !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+                >
+                  <div className="card-title flex items-center gap-1 text-xs">
+                    Budget {fromY}
+                    <span
+                      tabIndex={0}
+                      role="img"
+                      aria-label={`You've spent ${usd(spent, 0)} of your ${usd(target, 0)} target for ${fromY} so far, and we expect about ${usd(projected, 0)} by year's end (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). "Spent" adds up what you were actually charged for energy on this year's bills; the rest of the year is estimated. On-track vs. over budget accounts for winter naturally costing more. Click for the month-by-month breakdown, or set your target in Settings. Not a real charge.`}
+                      title={`You've spent ${usd(spent, 0)} of your ${usd(target, 0)} target for ${fromY} so far, and we expect about ${usd(projected, 0)} by year's end (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). "Spent" adds up what you were actually charged for energy on this year's bills; the rest of the year is estimated. On-track vs. over budget accounts for winter naturally costing more. Click for the month-by-month breakdown, or set your target in Settings. Not a real charge.`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+                    >
+                      i
+                    </span>
+                  </div>
+                  <div className="stat text-2xl">
+                    ~{usd(projected, 0)}<span className="text-sm text-slate-500"> / {usd(target, 0)}</span>
+                  </div>
+                  {/* Progress bar: spent solid, projected-remaining lighter, with a
+                      target tick. Overflows into a rose tint when over budget. */}
+                  <div className="relative mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                    <div className="absolute inset-y-0 left-0 flex">
+                      <div className={status === 'over' ? 'bg-rose-500/80' : 'bg-amber-400'} style={{ width: `${spentPct}%` }} />
+                      <div className={status === 'over' ? 'bg-rose-400/40' : 'bg-amber-400/35'} style={{ width: `${remPct}%` }} />
+                    </div>
+                    <div className="absolute inset-y-0 w-px bg-slate-300/80" style={{ left: `${targetPct}%` }} />
+                  </div>
+                  <div className={`sub mt-0.5 text-[11px] ${statusColor}`}>
+                    {statusLabel} · click for breakdown
+                  </div>
+                </div>
+              );
+            })() : null}
           </div>
+
+          {/* Subtle "set a budget" affordance (issue #46) when no target is set —
+              links to Settings where the target input lives. Hidden once a target
+              is set (the budget card replaces it). */}
+          {!budget && !empty ? (
+            <div className="shrink-0 text-[11px] text-slate-500">
+              Want to track an annual spending target?{' '}
+              <Link href="/settings" className="text-amber-400 hover:underline">Set a budget</Link>.
+            </div>
+          ) : null}
+
+          {/* The usage/cost anomaly callout (#45) that used to render here was
+              superseded by the header notifications bell — anomalies now appear as
+              dismissable items in that dropdown alongside the new-bill alert. */}
+
+          {/* The interactive Compare-periods (#47) and Supply what-if (#48) tools
+              no longer render inline here — they were powerful but rarely-used
+              clutter. They now live in the on-demand Tools modal (header "Tools"
+              button; the vs-last-year card opens it straight to Compare). The modal
+              itself is rendered once at the end of the component. */}
 
           {/* Main region: charts grid + bills rail. At ≥xl in "fit" density the
               charts carry explicit (100dvh-derived) heights so the three rows add
@@ -517,6 +736,21 @@ export function Dashboard() {
           </div>
         </>
       )}
+
+      {/* On-demand Tools modal: hosts the Compare-periods / Supply what-if tools as
+          tabs. ComparePeriods gets the full series (it windows internally); the
+          what-if back-tests the on-screen range — same data split as the old inline
+          renders, so the tools behave identically. */}
+      <ToolsModal
+        open={toolsOpen}
+        onClose={() => setToolsOpen(false)}
+        initialTab={toolsTab}
+        rows={rows}
+        rangedRows={ranged}
+        budget={budget}
+        seasonProjection={ov?.seasonProjection ?? null}
+        currencyDecimals={dp}
+      />
 
       {/* Footer only shows when the page can scroll (no point pinning it in fit mode). */}
       <footer className={`shrink-0 pt-1 text-center text-[11px] text-slate-600 ${fit ? 'xl:hidden' : ''}`}>

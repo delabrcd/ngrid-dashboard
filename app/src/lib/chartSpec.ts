@@ -17,6 +17,12 @@ export interface MonthRow {
   gasRateSupply: number | null;
   elecRateAllIn: number | null;
   gasRateAllIn: number | null;
+  // Trailing average of the effective SUPPLY $/unit (issue #48). Usage-weighted
+  // over a trailing window so a slowly creeping variable supply rate stands out
+  // against the noisier per-month line on the rates chart. Populated by
+  // withSupplyRateTrailing() in series.ts; null until a row's window has data.
+  elecRateSupplyAvg?: number | null;
+  gasRateSupplyAvg?: number | null;
   avgTemp: number | null;
   billTotal: number | null;
   // Length of the bill period in days, inclusive ((periodTo - periodFrom) + 1).
@@ -38,6 +44,14 @@ export interface MonthRow {
   projCost?: number | null; // projected period energy cost ($)
   projKwh?: number | null; // projected electric usage (kWh)
   projTherms?: number | null; // projected gas usage (therms)
+  // Carbon-footprint estimate (issue #49). LOCATION-BASED estimate: usage ×
+  // published average emission factors (electricity via eGRID subregion factor,
+  // gas via the EPA per-therm factor). Populated on historical rows by the pure
+  // estimateEmissions() (lib/emissions.ts); null when the fuel's usage is
+  // missing. kg CO2e. Has NO effect on any cost number or /api/verify.
+  co2eElec?: number | null; // estimated electricity emissions (kg CO2e)
+  co2eGas?: number | null; // estimated gas emissions (kg CO2e)
+  co2eTotal?: number | null; // combined estimated emissions (kg CO2e)
 }
 
 export type SeriesKey = Exclude<keyof MonthRow, 'ym' | 'label'>;
@@ -71,12 +85,15 @@ const HDD = '#fb7185';
 const CDD = '#38bdf8';
 const PROJ = '#a78bfa'; // forward seasonal projection (issue #52) — dashed, violet
 const PROJ_SOFT = '#c4b5fd';
+const CO2_ELEC = '#34d399'; // carbon estimate (issue #49) — green family
+const CO2_GAS = '#10b981';
 
 const money = (v: number) => `$${v}`;
 const money2 = (v: number) => `$${(+v).toFixed(2)}`;
 const deg = (v: number) => `${v}°`;
 const dd = (v: number) => `${Math.round(v)}`;
 const num3 = (v: number) => `${(+v).toFixed(3)}`;
+const kg = (v: number) => `${Math.round(v)} kg`;
 
 export const CHART_SPECS: ChartSpec[] = [
   {
@@ -111,12 +128,16 @@ export const CHART_SPECS: ChartSpec[] = [
   {
     id: 'rates',
     title: 'Effective rates',
-    subtitle: 'Supply rate (solid) and all-in rate (dashed)',
+    subtitle: 'What you pay per unit: supply (solid), recent average (faint dashed) and all-in price (dashed)',
     series: [
-      { key: 'elecRateSupply', label: 'Elec $/kWh', color: ELEC, role: 'line', axis: 'left' },
-      { key: 'elecRateAllIn', label: 'Elec $/kWh all-in', color: ELEC, role: 'line', axis: 'left', dash: true },
-      { key: 'gasRateSupply', label: 'Gas $/therm', color: GAS, role: 'line', axis: 'right' },
-      { key: 'gasRateAllIn', label: 'Gas $/therm all-in', color: GAS, role: 'line', axis: 'right', dash: true },
+      { key: 'elecRateSupply', label: 'Elec supply $/kWh', color: ELEC, role: 'line', axis: 'left' },
+      // Trailing-average supply rate (issue #48) — soft dashed, so a creeping
+      // variable supply rate is visible against the noisier per-month line.
+      { key: 'elecRateSupplyAvg', label: 'Elec supply $/kWh (recent avg)', color: ELEC_SOFT, role: 'line', axis: 'left', dash: true },
+      { key: 'elecRateAllIn', label: 'Elec $/kWh (full price)', color: ELEC, role: 'line', axis: 'left', dash: true },
+      { key: 'gasRateSupply', label: 'Gas supply $/therm', color: GAS, role: 'line', axis: 'right' },
+      { key: 'gasRateSupplyAvg', label: 'Gas supply $/therm (recent avg)', color: GAS_SOFT, role: 'line', axis: 'right', dash: true },
+      { key: 'gasRateAllIn', label: 'Gas $/therm (full price)', color: GAS, role: 'line', axis: 'right', dash: true },
     ],
     leftFmt: money2,
     rightFmt: money2,
@@ -136,26 +157,38 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'degreeDays',
-    title: 'Degree-days',
-    subtitle: 'Heating (HDD) and cooling (CDD) degree-days per bill period',
+    title: 'Heating & cooling weather',
+    subtitle: 'How much heating and cooling weather each bill period had',
     series: [
-      { key: 'hdd', label: 'HDD', color: HDD, role: 'bar', axis: 'left' },
-      { key: 'cdd', label: 'CDD', color: CDD, role: 'bar', axis: 'left' },
+      { key: 'hdd', label: 'Heating', color: HDD, role: 'bar', axis: 'left' },
+      { key: 'cdd', label: 'Cooling', color: CDD, role: 'bar', axis: 'left' },
     ],
     leftFmt: dd,
     filter: (r) => r.hdd != null || r.cdd != null,
   },
   {
     id: 'normalized',
-    title: 'Weather-normalized usage',
-    subtitle: 'kWh per degree-day (HDD+CDD) and therms per HDD — flat = weather-driven',
+    title: 'Weather-adjusted usage',
+    subtitle: 'Your energy use after accounting for how hot or cold it was — a flat line means weather explains the changes',
     series: [
-      { key: 'kwhPerDegreeDay', label: 'kWh / degree-day', color: ELEC, role: 'line', axis: 'left' },
-      { key: 'thermsPerHdd', label: 'therms / HDD', color: GAS, role: 'line', axis: 'right' },
+      { key: 'kwhPerDegreeDay', label: 'Electricity (weather-adjusted)', color: ELEC, role: 'line', axis: 'left' },
+      { key: 'thermsPerHdd', label: 'Gas (weather-adjusted)', color: GAS, role: 'line', axis: 'right' },
     ],
     leftFmt: num3,
     rightFmt: num3,
     filter: (r) => r.kwhPerDegreeDay != null || r.thermsPerHdd != null,
+  },
+  {
+    id: 'emissions',
+    title: 'Carbon footprint (estimate)',
+    subtitle: 'Estimated CO₂e per fuel each month, based on your usage and a regional grid average — not your specific plan',
+    series: [
+      { key: 'co2eElec', label: 'Electricity', color: CO2_ELEC, role: 'bar', axis: 'left' },
+      { key: 'co2eGas', label: 'Gas', color: CO2_GAS, role: 'bar', axis: 'left' },
+      { key: 'co2eTotal', label: 'Total', color: TOTAL, role: 'line', axis: 'left' },
+    ],
+    leftFmt: kg,
+    filter: (r) => r.co2eElec != null || r.co2eGas != null,
   },
 ];
 

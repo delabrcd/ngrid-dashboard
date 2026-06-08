@@ -247,8 +247,8 @@ describe('estimateNextBillSeasonal — full model (hand-calculated)', () => {
     expect(est.high - est.point).toBeCloseTo(sigma, 6);
     expect(est.low).toBeCloseTo(est.point - sigma, 6);
     expect(est.high).toBeCloseTo(est.point + sigma, 6);
-    expect(est.basis).toContain('Kalman-filtered fixed+variable rates');
-    expect(est.basis).toContain('back-test residuals');
+    expect(est.basis).toContain('your weather-adjusted usage and recent rates');
+    expect(est.basis).toContain('how accurate past estimates have been');
   });
 });
 

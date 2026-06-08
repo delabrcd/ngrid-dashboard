@@ -4,6 +4,7 @@
 import { prisma } from '@/lib/db';
 import type { MonthRow } from '@/lib/chartSpec';
 import { deriveMonthlySeries, type DegreeDayInput } from '@/lib/series';
+import { estimateEmissions, resolveEmissionFactors, trailing12Emissions } from '@/lib/emissions';
 import { sumDegreeDays } from '@/lib/weather/degreeDays';
 import { monthlyTempByYm } from '@/lib/weather/monthlyTemp';
 import { getSetting } from '@/lib/settings';
@@ -13,7 +14,17 @@ import {
   projectSeason,
   type SeasonProjection,
 } from '@/lib/prediction';
-import { trailing12AllIn } from '@/lib/series';
+import {
+  trailing12AllIn,
+  latestVsYearAgo,
+  withSupplyRateTrailing,
+  projectBudget,
+  calendarYearWindow,
+  type YoyResult,
+  type BudgetFuturePeriod,
+} from '@/lib/series';
+import { detectAnomalies } from '@/lib/anomaly';
+import { ymAddMonths } from '@/lib/ym';
 import { seasonNormalsByMonth, nextBillWindowDegreeDays } from '@/lib/weather/expectedDegreeDaysSync';
 import { shapeAccount, type AccountSummary } from '@/lib/accountSwitcher';
 import { ymFromDate as ymOf, isoDate as ymd } from '@/lib/ym';
@@ -93,13 +104,14 @@ export async function resolveRequestAccount(
 
 export async function getMonthlySeries(accountId: number): Promise<MonthRow[]> {
   const account = await prisma.account.findUnique({ where: { id: accountId } });
-  const [usages, costs, weather, bills, daily, baseSetting] = await Promise.all([
+  const [usages, costs, weather, bills, daily, baseSetting, gridFactorSetting] = await Promise.all([
     prisma.usage.findMany({ where: { accountId } }),
     prisma.cost.findMany({ where: { accountId } }),
     account?.region ? prisma.weather.findMany({ where: { region: account.region } }) : Promise.resolve([]),
     prisma.bill.findMany({ where: { accountId } }),
     prisma.weatherDaily.findMany({ where: { accountId }, orderBy: { date: 'asc' } }),
     getSetting('degreeDayBaseF'),
+    getSetting('gridEmissionFactor'),
   ]);
 
   // One temp per month, resolved by monthlyTempByYm (pure): prefer the
@@ -135,7 +147,7 @@ export async function getMonthlySeries(accountId: number): Promise<MonthRow[]> {
     return { ym: ymOf(b.statementDate), hdd, cdd };
   });
 
-  return deriveMonthlySeries({
+  const rows = deriveMonthlySeries({
     usages: usages.map((u) => ({ periodYearMonth: u.periodYearMonth, usageType: u.usageType, quantity: u.quantity })),
     costs: costs.map((c) => ({ periodYearMonth: c.periodYearMonth, fuelType: c.fuelType, kind: c.kind, amount: c.amount })),
     weather: [...tempByYm].map(([ym, avgTemperature]) => ({ ym, avgTemperature })),
@@ -150,6 +162,17 @@ export async function getMonthlySeries(accountId: number): Promise<MonthRow[]> {
     })),
     degreeDays,
   });
+
+  // Carbon-footprint estimate (issue #49). Annotate each row with location-based
+  // CO2e (kg) per fuel + combined, after the cost/rate math so it can never feed a
+  // cost number or /api/verify. The electricity grid factor comes from the
+  // gridEmissionFactor AppSetting override if set, else the account region's eGRID
+  // subregion default. PURE — see lib/emissions.ts.
+  const factors = resolveEmissionFactors(account?.region, gridFactorSetting);
+  // Supply-rate trend (issue #48): stamp the trailing-average supply $/unit so the
+  // rates chart can show the dashed trend line. Pure, in place; after the cost/rate
+  // math, never feeds /api/verify.
+  return withSupplyRateTrailing(estimateEmissions(rows, factors));
 }
 
 export async function getBills(accountId: number) {
@@ -217,6 +240,64 @@ export async function getOverview(accountId: number) {
   // total, both with horizon-widening bands. Climatological PROJECTION (degree-day
   // normals × all-in rates), never a forecast; never stored.
   const seasonProjection = await computeSeasonProjection(accountId, series);
+  // Trailing-12 carbon-footprint estimate (issue #49): per-fuel + combined kg CO2e
+  // over the most recent 12 estimated months, plus friendly equivalences. PURE
+  // (the series already carries per-row co2e). A location-based ESTIMATE only;
+  // never a cost number, never fed to /api/verify.
+  const emissions = trailing12Emissions(series);
+  // Always-visible "vs last year (normalized)" top-strip card (issue #47): the
+  // weather-normalized usage change for the LATEST usage month vs the same
+  // calendar month one year earlier, per fuel. PURE (latestVsYearAgo → compareYoY);
+  // rates are the currentCharges-sourced trailing-12 all-in for the normalized
+  // figure. null when there's no prior-year month to match. Never a real cost
+  // number, never fed to /api/verify. The full interactive period-compare tool
+  // computes its own windows client-side from the loaded series.
+  const latestYoy: YoyResult | null = latestVsYearAgo(series);
+  // Usage/cost anomaly detection (issue #45). Flags when the latest period's
+  // weather-normalized intensity (kwhPerDegreeDay/thermsPerHdd) or all-in $/unit
+  // (elecRateAllIn/gasRateAllIn) deviates from its robust trailing baseline
+  // (> k·MAD from the trailing median) — so a merely-cold month does NOT trip it
+  // but a genuine efficiency regression or a supply-rate/ESCO jump does. PURE
+  // (detectAnomalies); all inputs are currentCharges-derived, never the API
+  // amount due, and this never feeds /api/verify. Surfaced as a subtle callout
+  // that renders nothing when `flags` is empty.
+  const anomalies = detectAnomalies(series);
+  // Budget / annual-spend target with on-track projection (issue #46). The target
+  // is a per-account runtime AppSetting; the window defaults to the CALENDAR YEAR
+  // of the latest usage month (so "spent so far" and the projection are about the
+  // same year the data is in, not a server-clock year that might be ahead of the
+  // data). Spent is the sum of in-window billTotal (= currentCharges, PDF source
+  // of truth — projectBudget asserts this); the remaining projection REUSES the
+  // already-computed next-bill estimate and seasonal projection (we don't recompute
+  // anything), selecting only the in-window future periods. Null when no target is
+  // set. Never a real charge, never fed to /api/verify.
+  const budget = await (async () => {
+    const raw = (await getSetting('budgetTarget')) ?? '';
+    const target = Number.parseFloat(raw);
+    if (!Number.isFinite(target) || target <= 0) return null;
+    const lastUsage = [...series].reverse().find((r) => r.kwh != null || r.therms != null);
+    const anchorYm = lastUsage?.ym ?? null;
+    if (anchorYm == null) return null;
+    const window = calendarYearWindow(anchorYm);
+    // Map the next-bill estimate (which covers the month after the latest usage
+    // row) and the seasonal projection months onto the budget's future-period
+    // shape (ym + point/low/high band).
+    const nextBill: BudgetFuturePeriod | null = nextBillEstimate
+      ? {
+          ym: ymAddMonths(anchorYm, 1),
+          point: nextBillEstimate.point,
+          low: nextBillEstimate.low,
+          high: nextBillEstimate.high,
+        }
+      : null;
+    const seasonMonths: BudgetFuturePeriod[] = (seasonProjection?.months ?? []).map((m) => ({
+      ym: m.ym,
+      point: m.projCost,
+      low: m.low,
+      high: m.high,
+    }));
+    return projectBudget(series, target, window, { nextBill, seasonMonths });
+  })();
   const latest = bills[0] ? shapeBill(bills[0]) : null;
   return {
     account: account
@@ -232,6 +313,10 @@ export async function getOverview(accountId: number) {
     lifetimeSpend,
     nextBillEstimate,
     seasonProjection,
+    emissions,
+    latestYoy,
+    budget,
+    anomalies,
     latestBill: latest
       ? {
           statementDate: latest.statementDate,

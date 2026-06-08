@@ -19,6 +19,16 @@ interface ServerSettings {
   billCount: number;
   firstStatement: string | null;
   latestBill: { statementDate: string; totalDueAmount: number | null } | null;
+  // Carbon-footprint estimate (issue #49). The raw grid-factor override (empty
+  // when unset) and the effective factor actually used (region default or override).
+  gridEmissionFactor?: string;
+  effectiveGridFactor?: number;
+  // Budget / annual-spend target (issue #46). The raw target dollars (empty when
+  // unset). Calendar-year window; tracked on the dashboard's budget card.
+  budgetTarget?: string;
+  // Anomaly alert on a flagged new bill (issue #45). OFF by default; reuses the
+  // configured new-bill notification channel.
+  anomalyNotifyEnabled?: boolean;
 }
 interface Run {
   id: number;
@@ -49,6 +59,17 @@ export function SettingsView() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [savingSched, setSavingSched] = useState(false);
+  // Carbon-footprint grid-factor override (issue #49). Local edit buffer for the
+  // input; seeded from the server value once loaded. Empty = use region default.
+  const [gridFactor, setGridFactor] = useState('');
+  const [savingGrid, setSavingGrid] = useState(false);
+  // Budget / annual-spend target (issue #46). Local edit buffer; seeded from the
+  // server value once loaded. Empty = no target (the dashboard budget card hides).
+  const [budgetTarget, setBudgetTarget] = useState('');
+  const [savingBudget, setSavingBudget] = useState(false);
+  // Anomaly alert toggle (issue #45). OFF by default; saved on flip like the
+  // scheduler toggle.
+  const [savingAnomaly, setSavingAnomaly] = useState(false);
   const [verify, setVerify] = useState<{ ok: boolean; total: number; failed: number; bills: { statementDate: string; ok: boolean; checks: { name: string; ok: boolean; detail?: string }[] }[] } | null>(null);
   const [verifying, setVerifying] = useState(false);
   // Bill-PDF bulk-download range. Empty until the user (or the loaded account)
@@ -73,6 +94,8 @@ export function SettingsView() {
     setServer(s);
     setRuns(r.runs || []);
     setAccounts(a.accounts || []);
+    setGridFactor(s.gridEmissionFactor ?? '');
+    setBudgetTarget(s.budgetTarget ?? '');
   }, []);
 
   // Match the dashboard's scoping so an export = what's on screen. Validate the
@@ -112,6 +135,44 @@ export function SettingsView() {
     setServer((s) => (s ? { ...s, schedulerEnabled: enabled } : s));
     await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ schedulerEnabled: enabled }) });
     setSavingSched(false);
+    loadServer();
+  };
+
+  // Toggle the anomaly alert on a flagged new bill (issue #45). OFF by default;
+  // optimistic update then reload. Reuses the configured notification channel.
+  const setAnomalyNotify = async (enabled: boolean) => {
+    setSavingAnomaly(true);
+    setServer((s) => (s ? { ...s, anomalyNotifyEnabled: enabled } : s));
+    await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ anomalyNotifyEnabled: enabled }) });
+    setSavingAnomaly(false);
+    loadServer();
+  };
+
+  // Save (or clear) the carbon-estimate grid-factor override. The server validates
+  // it's a positive number before storing; an empty value reverts to the region
+  // eGRID default. We reload so the displayed "effective" factor reflects the result.
+  const saveGridFactor = async () => {
+    setSavingGrid(true);
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ gridEmissionFactor: gridFactor.trim() }),
+    });
+    setSavingGrid(false);
+    loadServer();
+  };
+
+  // Save (or clear) the annual-spend budget target (issue #46). The server
+  // validates it's a positive number before storing; an empty value clears it
+  // (the dashboard budget card disappears). Reload so the saved state reflects.
+  const saveBudgetTarget = async () => {
+    setSavingBudget(true);
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ budgetTarget: budgetTarget.trim() }),
+    });
+    setSavingBudget(false);
     loadServer();
   };
 
@@ -170,7 +231,7 @@ export function SettingsView() {
         <div className="space-y-3">
           <div>
             <div className="text-sm font-medium text-slate-200">12-month projection</div>
-            <div className="text-xs text-slate-500">Show the seasonal next-12-months projection independently on the charts and as a summary card</div>
+            <div className="text-xs text-slate-500">Show an estimate of the next 12 months as a dashed line on the cost &amp; usage charts. The estimated yearly total now lives in the Budget tool (Tools &rarr; Budget), so there&rsquo;s no longer a separate summary card.</div>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 pl-3">
             <div className="text-xs text-slate-400">On charts <span className="text-slate-600">— dashed projected series on cost &amp; usage</span></div>
@@ -183,16 +244,84 @@ export function SettingsView() {
               ))}
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 pl-3">
-            <div className="text-xs text-slate-400">Summary card <span className="text-slate-600">— the &ldquo;Proj. next 12 mo&rdquo; stat card</span></div>
-            <div className="inline-flex overflow-hidden rounded-lg border border-slate-700">
-              {([true, false] as const).map((on) => (
-                <button key={String(on)} onClick={() => patch({ showProjectionCard: on })}
-                  className={`px-3 py-1 text-xs transition ${prefs.showProjectionCard === on ? 'bg-amber-500 text-slate-950' : 'bg-slate-800/50 text-slate-300 hover:bg-slate-700'}`}>
-                  {on ? 'On' : 'Off'}
-                </button>
-              ))}
+        </div>
+
+        {/* Carbon-footprint estimate grid factor (issue #49). Server-side runtime
+            setting (AppSetting), not a browser pref, so it changes the estimate for
+            every viewer. A location-based ESTIMATE — never touches a cost number. */}
+        <div className="space-y-2">
+          <div>
+            <div className="text-sm font-medium text-slate-200">Carbon estimate — grid factor</div>
+            <div className="text-xs text-slate-500">
+              Carbon per unit of electricity, used for the carbon estimate. Leave blank to use your region&apos;s
+              grid average; set your own if you&apos;re on a green or renewable plan. Gas uses a standard
+              published factor.
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pl-3">
+            <input
+              type="number"
+              step="0.001"
+              min="0"
+              inputMode="decimal"
+              value={gridFactor}
+              placeholder={server?.account?.region ? 'region default' : ''}
+              onChange={(e) => setGridFactor(e.target.value)}
+              className="w-32 rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200"
+            />
+            <button
+              onClick={saveGridFactor}
+              disabled={savingGrid || gridFactor === (server?.gridEmissionFactor ?? '')}
+              className="btn border border-slate-700/70 bg-slate-800/40 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40"
+            >
+              {savingGrid ? 'Saving…' : 'Save'}
+            </button>
+            {server?.effectiveGridFactor != null && (
+              <span className="text-xs text-slate-500">
+                In use: <span className="text-slate-300">{server.effectiveGridFactor} kg/kWh</span>
+                {server.gridEmissionFactor ? '' : ' (region default)'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Budget / annual-spend target (issue #46). A positive dollar target,
+            tracked on the dashboard's budget card (spent so far vs a projected
+            end-of-year total). Calendar-year window. Blank clears it. */}
+        <div className="space-y-2">
+          <div>
+            <div className="text-sm font-medium text-slate-200">Annual spending target</div>
+            <div className="text-xs text-slate-500">
+              How much you want to spend on energy this calendar year. The dashboard shows a budget card with
+              how much you&apos;ve spent so far and an estimated end-of-year total, plus whether you&apos;re on track.
+              Leave blank to hide the card.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pl-3">
+            <input
+              type="number"
+              step="50"
+              min="0"
+              inputMode="decimal"
+              value={budgetTarget}
+              placeholder="e.g. 2800"
+              onChange={(e) => setBudgetTarget(e.target.value)}
+              className="w-32 rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200"
+            />
+            <button
+              onClick={saveBudgetTarget}
+              disabled={savingBudget || budgetTarget === (server?.budgetTarget ?? '')}
+              className="btn border border-slate-700/70 bg-slate-800/40 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40"
+            >
+              {savingBudget ? 'Saving…' : 'Save'}
+            </button>
+            {server?.budgetTarget ? (
+              <span className="text-xs text-slate-500">
+                Target: <span className="text-slate-300">${server.budgetTarget}/yr</span>
+              </span>
+            ) : (
+              <span className="text-xs text-slate-500">No target set</span>
+            )}
           </div>
         </div>
 
@@ -274,6 +403,22 @@ export function SettingsView() {
               Last notified through statement <span className="text-slate-300">{dateLabel(server.notify.lastNotifiedStatementDate)}</span>
             </div>
           )}
+
+          {/* Anomaly alert on a flagged new bill (issue #45). OFF by default;
+              reuses the configured channel above and only fires when a scheduled
+              scrape brings in a bill whose weather-normalized usage or all-in rate
+              is well outside its robust trailing baseline (at most once per bill). */}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Alert on bill anomalies</div>
+              <div className="text-xs text-slate-500">
+                Sends one alert on the channel above when a new bill&apos;s usage (after accounting for the weather) or
+                price is well outside your recent normal. {savingAnomaly ? 'Saving…' : 'Off by default.'}
+                {server?.notify && !server.notify.configured ? ' Configure a channel (above) for this to send.' : ''}
+              </div>
+            </div>
+            <Toggle checked={!!server?.anomalyNotifyEnabled} onChange={setAnomalyNotify} />
+          </div>
         </div>
       </section>
 
@@ -338,8 +483,8 @@ export function SettingsView() {
         <div className="border-t border-slate-800 pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-slate-200">Data integrity</div>
-              <div className="text-xs text-slate-500">Re-parse every bill PDF and cross-check the stored numbers against it.</div>
+              <div className="text-sm font-medium text-slate-200">Data check</div>
+              <div className="text-xs text-slate-500">Double-check that the numbers shown here match your actual bills.</div>
             </div>
             <button className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" onClick={runVerify} disabled={verifying}>
               {verifying ? 'Verifying…' : 'Verify all bills'}
@@ -348,7 +493,7 @@ export function SettingsView() {
           {verify && (
             <div className="mt-3 text-sm">
               {verify.ok ? (
-                <p className="text-emerald-400">✓ All {verify.total} bills match their PDFs exactly.</p>
+                <p className="text-emerald-400">✓ All {verify.total} bills match your actual statements exactly.</p>
               ) : (
                 <div className="text-rose-400">
                   <p>✗ {verify.failed} of {verify.total} bills have mismatches:</p>

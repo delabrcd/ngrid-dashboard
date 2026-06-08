@@ -38,6 +38,18 @@ export interface Prefs {
   // only sensible value on a single-account install). Survives reload via
   // localStorage; an id that no longer exists is ignored at fetch time.
   selectedAccountId: number | null;
+  // Locally-dismissed in-app notifications (notifications-dropdown feature): the
+  // stable keys (see lib/notifications.ts) of header-bell items the user has
+  // dismissed. Persisted here so a dismissal sticks across reloads on this
+  // browser; a dismissed key never reappears. Empty by default.
+  // NOTE: superseded by the server-side notification log (notification-log
+  // feature) — read/unread now lives in the DB and the bell no longer reads this.
+  // Kept for back-compat with persisted prefs (additive change only).
+  dismissedNotifications: string[];
+  // Show ALREADY-READ items in the notifications bell (notification-log feature).
+  // OFF by default — the dropdown shows only unread, with a header toggle to reveal
+  // the read history (rendered muted). Persisted per-browser.
+  showReadNotifications: boolean;
 }
 
 const baseChart = (over: Partial<ChartConfig> = {}): ChartConfig => ({
@@ -57,6 +69,8 @@ export const DEFAULT_PREFS: Prefs = {
   showProjectionOnCharts: true,
   showProjectionCard: true,
   selectedAccountId: null,
+  dismissedNotifications: [],
+  showReadNotifications: false,
   order: CHART_SPECS.map((s) => s.id),
   charts: {
     usage: baseChart({ stacked: false }),
@@ -65,6 +79,7 @@ export const DEFAULT_PREFS: Prefs = {
     weather: baseChart({ stacked: false }),
     degreeDays: baseChart({ stacked: false }),
     normalized: baseChart({ type: 'line' }),
+    emissions: baseChart({ stacked: false }),
   },
 };
 
@@ -90,6 +105,11 @@ export function mergePrefs(
     showProjectionOnCharts: saved.showProjectionOnCharts ?? legacyProjection,
     showProjectionCard: saved.showProjectionCard ?? legacyProjection,
     selectedAccountId: saved.selectedAccountId ?? DEFAULT_PREFS.selectedAccountId,
+    // Defend against a malformed persisted value (only keep strings); default [].
+    dismissedNotifications: Array.isArray(saved.dismissedNotifications)
+      ? saved.dismissedNotifications.filter((k): k is string => typeof k === 'string')
+      : DEFAULT_PREFS.dismissedNotifications,
+    showReadNotifications: saved.showReadNotifications ?? DEFAULT_PREFS.showReadNotifications,
     order: mergeOrder(saved.order, DEFAULT_PREFS.order),
     charts,
   };

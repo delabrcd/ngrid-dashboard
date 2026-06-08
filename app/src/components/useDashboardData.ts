@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { MonthRow } from '@/lib/chartSpec';
+import type { YoyResult } from '@/lib/series';
+import type { AnomalyResult } from '@/lib/anomaly';
 import { resolveSelectedAccountId, type AccountSummary } from '@/lib/accountSwitcher';
 import { usePrefs } from '@/lib/prefs';
 import { useScrapeProgress } from './ScrapeProgress';
@@ -29,6 +31,44 @@ export interface Overview {
     annual: { point: number; low: number; high: number };
     basis: string;
   } | null;
+  // Trailing-12 carbon-footprint estimate (issue #49): per-fuel + combined kg
+  // CO2e plus friendly equivalences. Location-based ESTIMATE, not a real charge.
+  emissions?: {
+    elecKg: number;
+    gasKg: number;
+    totalKg: number;
+    gallonsGasoline: number;
+    treeYears: number;
+  } | null;
+  // "vs last year (normalized)" top-strip card (issue #47): the weather-normalized
+  // usage change for the latest usage month vs the same calendar month a year
+  // earlier, per fuel. Computed purely server-side (latestVsYearAgo → compareYoY);
+  // null without a prior-year month to match. The full interactive compare tool
+  // computes its own windows client-side from the loaded series rows.
+  latestYoy?: YoyResult | null;
+  // Budget / annual-spend target with on-track projection (issue #46): spent so
+  // far (currentCharges), the projected end-of-window total with a confidence
+  // band, and on/over/under status vs the target. null when no target is set.
+  budget?: {
+    window: { fromYm: number; toYm: number };
+    target: number;
+    spent: number;
+    billsCounted: number;
+    remaining: number;
+    remainingLow: number;
+    remainingHigh: number;
+    remainingPeriods: number;
+    projected: number;
+    projectedLow: number;
+    projectedHigh: number;
+    delta: number;
+    status: 'over' | 'under' | 'on_track';
+  } | null;
+  // Usage/cost anomaly detection (issue #45): typed flags when the latest
+  // period's weather-normalized intensity or all-in $/unit deviates from its
+  // robust trailing baseline. `flags` is empty when nothing is anomalous (the
+  // callout then renders nothing). Computed purely server-side (detectAnomalies).
+  anomalies?: AnomalyResult | null;
   latestBill?: { statementDate: string; totalDueAmount: number | null } | null;
   firstStatement?: string | null;
   schedule?: { predictedNextBillDate: string | null; nextCheckAt: string | null; lastCheckedAt: string | null } | null;

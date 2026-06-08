@@ -4,7 +4,10 @@
 import { prisma } from '@/lib/db';
 import { computeNextCheck, predictNextBill } from '@/lib/prediction';
 import { syncHistoricalWeather } from '@/lib/weather/sync';
-import { notifyNewBills } from '@/lib/notify';
+import { notifyNewBills, notifyAnomaly } from '@/lib/notify';
+import { detectAnomalies } from '@/lib/anomaly';
+import { getMonthlySeries } from '@/lib/queries';
+import { syncNotifications } from '@/lib/notificationStore';
 import { collect } from './collect';
 import { persist } from './persist';
 import { classifyLoginError, shouldSkipScheduled, statusOnSuccess } from './loginStatus';
@@ -205,6 +208,37 @@ export async function runScrape(
           await notifyNewBills(bills, (m) => progress(m));
         } catch (nerr: any) {
           progress(`notify skipped: ${String(nerr?.message || nerr).slice(0, 200)}`);
+        }
+
+        // Usage/cost anomaly alert (issue #45). OFF by default and dedup-safe —
+        // notifyAnomaly seeds its own watermark on first run and only sends when
+        // the anomalyNotifyEnabled toggle is on. We detect on the freshest series
+        // for each scraped account (weather-normalized usage + all-in rate vs the
+        // robust trailing baseline) and alert at most once per flagged period.
+        // Fully contained: never fails or slows a successful scrape.
+        try {
+          for (const accountId of scrapedAccountIds) {
+            const series = await getMonthlySeries(accountId);
+            const { flags, ym } = detectAnomalies(series);
+            await notifyAnomaly(flags, ym, (m) => progress(m));
+          }
+        } catch (aerr: any) {
+          progress(`anomaly notify skipped: ${String(aerr?.message || aerr).slice(0, 200)}`);
+        }
+
+        // Server-side notification log (notification-log feature). Persist the
+        // new-bill + anomaly EVENTS into the Notification table so the in-app bell
+        // has a clickable history even if the UI never fetched. Idempotent (INSERTs
+        // only missing rows by (accountId, key), never touches readAt), so this is
+        // safe to run every scrape. Fully contained — a log hiccup must never fail
+        // or slow a successful scrape.
+        try {
+          for (const accountId of scrapedAccountIds) {
+            const inserted = await syncNotifications(accountId);
+            if (inserted) progress(`notification log: ${inserted} new`);
+          }
+        } catch (lerr: any) {
+          progress(`notification log skipped: ${String(lerr?.message || lerr).slice(0, 200)}`);
         }
       }
 

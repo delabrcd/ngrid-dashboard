@@ -278,8 +278,8 @@ export function NgLoginsSection({ onChanged }: { onChanged?: () => void } = {}) 
       <div>
         <h2 className="text-lg font-semibold text-slate-100">National Grid logins</h2>
         <p className="mt-1 text-xs text-slate-500">
-          Credentials are stored encrypted (AES-256-GCM). Adding one runs a real login to verify it; if National Grid
-          sends a one-time code you&apos;ll be asked for it here.
+          Your login is stored securely (encrypted) and used only to pull your own account. Adding one signs in once
+          to check it works; if National Grid sends a one-time code you&apos;ll be asked for it here.
         </p>
       </div>
 
