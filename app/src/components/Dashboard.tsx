@@ -22,7 +22,7 @@ import { ScrapeProgressBanner } from './ScrapeProgress';
 import { RangeControl } from './RangeControl';
 import { NgLoginsSection } from './NgLoginsSection';
 import { ToolsModal, type ToolsTab } from './ToolsModal';
-import { NotificationsBell } from './NotificationsBell';
+import { HeaderActions } from './HeaderActions';
 import { useDashboardData } from './useDashboardData';
 import { dateLabel, relativeFromNow } from '@/lib/format';
 import { STAT_SPECS, type StatData } from '@/lib/widgets/statSpec';
@@ -35,7 +35,14 @@ import {
 } from '@/lib/widgets/registry';
 import { WidgetLayout } from './WidgetLayout';
 import { WidgetPalette, type PaletteGroup } from './WidgetPalette';
-import { FIT_BREAKPOINT, generateDefaultPlacements, type Breakpoint, type Placement } from '@/lib/layoutEngine';
+import {
+  COLS,
+  FIT_BREAKPOINT,
+  findFreeSlot,
+  generateDefaultPlacements,
+  type Breakpoint,
+  type Placement,
+} from '@/lib/layoutEngine';
 
 export function Dashboard() {
   const { prefs, patch, setRange } = usePrefs();
@@ -264,15 +271,18 @@ export function Dashboard() {
     if (!cur) return; // nothing removed yet → already shown
     const lg = Array.isArray(cur[FIT_BREAKPOINT]) ? cur[FIT_BREAKPOINT]! : [];
     if (lg.some((p) => p.i === type)) return; // already placed
-    // Drop a default-sized placement at the top-left of the lg grid; RGL's
-    // vertical compaction tucks it in and the user can drag it. Other breakpoints
-    // get it appended by WidgetLayout's merge against fresh defaults.
     const next: Record<string, Placement[]> = { ...(cur as Record<string, Placement[]>) };
-    // Drop at the widget's registry default size so an added chart/stat/panel
-    // lands at a sensible size; RGL's vertical compaction tucks it in.
+    // Drop at the widget's registry default size on the FIRST free slot of the lg
+    // grid. Under FREE PLACEMENT (compactType=null + preventCollision, CHANGE 2)
+    // RGL no longer compacts a tile dropped at (0,0) into an empty cell, and would
+    // REJECT a drop that overlaps an existing tile — so we must place the new tile
+    // on an empty patch ourselves (findFreeSlot scans reading-order for the first
+    // non-overlapping cell, always finding one below the layout at worst). Other
+    // breakpoints get it appended by WidgetLayout's merge against fresh defaults.
     const { defaultSize } = getWidget(type);
+    const slot = findFreeSlot(lg, defaultSize, COLS[FIT_BREAKPOINT]);
     next[FIT_BREAKPOINT] = [
-      { i: type, x: 0, y: 0, w: defaultSize.w, h: defaultSize.h, minW: defaultSize.minW, minH: defaultSize.minH },
+      { i: type, x: slot.x, y: slot.y, w: defaultSize.w, h: defaultSize.h, minW: defaultSize.minW, minH: defaultSize.minH },
       ...lg,
     ];
     setPlacements(next);
@@ -382,11 +392,17 @@ export function Dashboard() {
           fit (replacing the FILL_BODY_CLASSES constant). Everything inside here
           is layout the user can't drag; the draggable grid lives below it. */}
       <div data-dashboard-chrome className="flex shrink-0 flex-col gap-3 xl:gap-2">
-        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold tracking-tight text-slate-50">National Grid Dashboard</h1>
-              <span className="rounded-full border border-slate-700/70 bg-slate-800/50 px-2 py-0.5 font-mono text-xs text-slate-400">
+        {/* HARD TOP-RIGHT ACTIONS (issue #73 mobile fix): a NO-WRAP row with the
+            title/account block on the left and the action area on the right. The
+            title block is `min-w-0` so it can SHRINK and truncate; the action area
+            is `shrink-0` and anchored right via `justify-between`, so the hamburger
+            (mobile) / inline buttons (≥sm) can NEVER wrap to a new line or drift
+            left — other content yields to it. */}
+        <header className="flex flex-nowrap items-center justify-between gap-x-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-lg font-bold tracking-tight text-slate-50 sm:text-xl">National Grid Dashboard</h1>
+              <span className="hidden shrink-0 rounded-full border border-slate-700/70 bg-slate-800/50 px-2 py-0.5 font-mono text-xs text-slate-400 sm:inline">
                 v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}
               </span>
             </div>
@@ -398,7 +414,7 @@ export function Dashboard() {
               />
             ) : (
               ov?.account && (
-                <p className="text-sm text-slate-400">
+                <p className="hidden min-w-0 truncate text-sm text-slate-400 sm:block">
                   Account {ov.account.accountNumber}
                   {ov.account.serviceAddress ? ` · ${ov.account.serviceAddress}` : ''}
                   {ov.account.companyCode ? ` · ${ov.account.companyCode}` : ''}
@@ -406,66 +422,23 @@ export function Dashboard() {
               )
             )}
           </div>
-          {/* Header actions. flex-wrap + justify-end so the button cluster
-              (Customize / bell / Tools / Settings / Refresh) wraps onto a second
-              line on narrow screens instead of overflowing the viewport (the
-              added Customize button pushed the unwrapped row past ~390px → a
-              horizontal scrollbar on mobile). No effect at widths where they fit. */}
-          <div className="flex flex-wrap items-center justify-end gap-2 gap-y-2">
-            {/* Customize / Done toggle (Phase E, #73): flips the grid between the
-                static default view and the drag/resize/add/remove edit mode. Only
-                shown when there's data to arrange. */}
-            {!empty && !layoutLoading && layout && (
-              <button
-                type="button"
-                onClick={() => setCustomizing((v) => !v)}
-                className={`btn border ${
-                  customizing
-                    ? 'border-amber-500/60 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
-                    : 'border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700'
-                }`}
-              >
-                {customizing ? (
-                  <>
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                    Done
-                  </>
-                ) : (
-                  <>
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 21v-4l11-11 4 4L8 21H4zM13 6l4 4" /></svg>
-                    Customize
-                  </>
-                )}
-              </button>
-            )}
-            {!empty && (
-              <NotificationsBell
-                accountId={selectedAccountId}
-                bills={bills}
-                onOpenCompare={() => openTools('compare')}
-              />
-            )}
-            {!empty && (
-              <button
-                type="button"
-                onClick={() => openTools('compare')}
-                className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.3 2.3a1.5 1.5 0 0 1-2.1-2.1z" />
-                </svg>
-                Tools
-              </button>
-            )}
-            <Link href="/settings" className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700">
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-              Settings
-            </Link>
-            <RefreshButton onDone={load} onStarted={trackRun} running={scraping} />
-          </div>
+          {/* Header actions (Customize / bell / Tools / Settings / Refresh). At
+              ≥sm they render inline exactly as before; below sm they collapse into
+              a ☰ hamburger menu (the bell stays visible) so they never overflow a
+              phone — HeaderActions owns that responsive split and shares every
+              handler between the inline buttons and the menu items (issue #73). */}
+          <HeaderActions
+            empty={empty}
+            canCustomize={!empty && !layoutLoading && !!layout}
+            customizing={customizing}
+            onToggleCustomize={() => setCustomizing((v) => !v)}
+            onOpenTools={() => openTools('compare')}
+            accountId={selectedAccountId}
+            bills={bills}
+            onRefreshDone={load}
+            onRefreshStarted={trackRun}
+            scraping={scraping}
+          />
         </header>
 
         <ScrapeProgressBanner run={progressRun} onRetry={retryScrape} onDismiss={dismissProgress} />
@@ -490,19 +463,28 @@ export function Dashboard() {
           </div>
         )}
 
-        {/* Control strip: range picker + schedule pills. */}
+        {/* Control strip: range picker + schedule pills. On a phone these must
+            stay TIDY (issue #73): the range presets keep their own segmented row,
+            and the schedule pills flow as a compact WRAPPING row (never one-per-
+            line). The strip wraps as a whole at narrow widths so the schedule
+            group drops below the range group rather than overflowing sideways, and
+            each pill is `whitespace-nowrap` so a pill stays intact while the ROW
+            (not the pill) wraps. The "Next bill" relative-time parenthetical is
+            hidden below sm so the pill stays short on a phone. */}
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           {!empty && (
             <RangeControl range={prefs.range} onChange={setRange} allYms={allYms} nowYm={nowYm} />
           )}
           {ov?.schedule && (
-            <div className="flex flex-wrap gap-2">
-              <span className="pill">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <span className="pill whitespace-nowrap">
                 Next bill <strong className="text-slate-100">{dateLabel(ov.schedule.predictedNextBillDate)}</strong>
-                {ov.schedule.predictedNextBillDate ? ` (${relativeFromNow(ov.schedule.predictedNextBillDate + 'T00:00:00')})` : ''}
+                {ov.schedule.predictedNextBillDate ? (
+                  <span className="hidden sm:inline"> ({relativeFromNow(ov.schedule.predictedNextBillDate + 'T00:00:00')})</span>
+                ) : null}
               </span>
-              <span className="pill">Checked {relativeFromNow(ov.schedule.lastCheckedAt)}</span>
-              <span className="pill">Next {relativeFromNow(ov.schedule.nextCheckAt)}</span>
+              <span className="pill whitespace-nowrap">Checked {relativeFromNow(ov.schedule.lastCheckedAt)}</span>
+              <span className="pill whitespace-nowrap">Next {relativeFromNow(ov.schedule.nextCheckAt)}</span>
             </div>
           )}
         </div>

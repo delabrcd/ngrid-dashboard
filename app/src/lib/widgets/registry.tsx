@@ -25,6 +25,28 @@ import { BudgetStatCard, StatCard, YoyStatCard } from '@/components/widgets/Stat
 import { BillsPanel, type BillsPanelData } from '@/components/widgets/BillsPanel';
 import type { ChartConfig } from '@/lib/prefs';
 import type { ToolsTab } from '@/components/ToolsModal';
+import { essentialHeightPx, pxToMinRows, type StatCardKind } from '@/lib/widgets/cardFit';
+
+// Reference rowHeight (px) + RGL margin used ONLY to translate a widget's
+// essential CONTENT height (from cardFit.ts) into a grid-row `minH`. The fit
+// breakpoint's runtime rowHeight is computed (computePageFit) and varies with the
+// viewport; `minH` is a static placement bound, so we derive it against the
+// SMALLEST realistic fit row (MIN_ROW_HEIGHT, 24px) — the conservative floor — so
+// the row count covers the essential content even on a short viewport where the
+// rowHeight bottoms out (a card can NEVER be dragged below the height its title +
+// headline + bar need, at any fit row). Mirrors MARGIN/MIN_ROW_HEIGHT in
+// layoutEngine/WidgetLayout.
+const REF_ROW_HEIGHT = 24; // = MIN_ROW_HEIGHT (the fit rowHeight floor)
+const REF_MARGIN = 8;
+
+// The grid `minH` for a stat card of the given kind: the row count whose pixels
+// cover the card's ESSENTIAL content (title + headline, + the budget bar). The
+// detail/sub line is NOT in the essential block — it hides via the container
+// query when it wouldn't fit — so minH guarantees only the must-show content,
+// and a card resized to minH never overflows. Derived, not hand-guessed.
+function statMinH(kind: StatCardKind): number {
+  return pxToMinRows(essentialHeightPx(kind), REF_ROW_HEIGHT, REF_MARGIN);
+}
 
 // The host context every widget render can read.
 //   • chart widgets (Phase B, #94): they declare a `dataset` dependency and the
@@ -100,9 +122,10 @@ function chartWidget(spec: ChartSpec): WidgetDef {
     category: 'chart',
     title: spec.title,
     dataDeps: [spec.dataset],
-    // A chart fills half the lg chart block (4 of 12 cols) and is tall (7 rows,
-    // = CHART_ROWS); mirrors the default generator's two-up chart placement.
-    defaultSize: { w: 4, h: 7, minW: 2, minH: 3 },
+    // A chart is HALF the lg grid (6 of 12 cols) and tall (7 rows = CHART_ROWS);
+    // mirrors the default generator's 2×2 two-up chart placement (issue #73
+    // density iteration). minW=3 keeps an added chart at least quarter-width.
+    defaultSize: { w: 6, h: 7, minW: 3, minH: 3 },
     render: (host) => {
       const drawn = host.specFor(spec.id);
       const rows = host.resolveDataset(drawn.dataset, spec.id);
@@ -139,8 +162,15 @@ function statWidget(spec: StatSpec): WidgetDef {
     // ("≈ N gal gas · N tree-yrs · estimate") and the two-fuel YoY row fit on one
     // line, and 3 rows tall (= STAT_ROWS, ~120px at the fit rowHeight) so the
     // budget card's title + headline + progress bar + status line aren't clipped.
-    // minH=2 keeps the shortest usable card; minW=2 keeps the sub line legible.
-    defaultSize: { w: 3, h: 3, minW: 2, minH: 2 },
+    // minH is DERIVED from the card's essential content (cardFit.ts) — the budget
+    // card reserves its progress bar, so it gets a taller floor than a simple/yoy
+    // card. minW=2 keeps the sub line legible.
+    defaultSize: {
+      w: 3,
+      h: 3,
+      minW: 2,
+      minH: statMinH(spec.kind === 'budget' ? 'budget' : 'simple'),
+    },
     render: (host) => {
       const d = host.statData;
       if (spec.kind === 'simple') return <StatCard model={spec.select(d)} />;
@@ -152,14 +182,15 @@ function statWidget(spec: StatSpec): WidgetDef {
 
 // The bills rail as a `panel` widget (Phase E, #73). One instance, id
 // 'panel:bills'. Renders the BillsPanel from the host's range-filtered bills +
-// export scopes (byte-identical to the old inline rail). It's wide (4 of 12 cols
-// at lg → the right rail) and tall so it stretches the cockpit like before.
+// export scopes. It's full-width (12 of 12 cols at lg) and one page-band tall so
+// it occupies its own page below the 2×2 charts (issue #73 density iteration);
+// it scrolls internally so a full page of bills reads well.
 const BILLS_PANEL: WidgetDef = {
   type: 'panel:bills',
   category: 'panel',
   title: 'Bills',
   dataDeps: ['bills'],
-  defaultSize: { w: 4, h: 14, minW: 2, minH: 4 },
+  defaultSize: { w: 12, h: 14, minW: 3, minH: 4 },
   render: (host) => <BillsPanel data={host.billsData} />,
 };
 

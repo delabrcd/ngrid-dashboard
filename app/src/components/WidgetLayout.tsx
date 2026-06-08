@@ -1,27 +1,33 @@
 'use client';
 
 // The react-grid-layout host (Phase E of the UI re-architecture, issue #73; RFC
-// §3.3 + Decision 2), with the PAGINATED no-scroll fit from the operator-feedback
-// iteration. This is the component half of the layout engine: it takes the placed
-// widgets, renders them through the registry inside RGL's Responsive grid, and at
-// the fit breakpoint PAGINATES them like a phone home screen — NEVER scrolling.
-// All the load-bearing MATH (the page partition, the fill-the-page rowHeight, the
-// tile-can't-straddle-a-page repair) lives in lib/layoutEngine.ts (pure, unit-
-// tested); this component only wires RGL + a ResizeObserver to those functions.
+// §3.3 + Decision 2), with the PER-PAGE BOUNDED no-scroll fit from the operator's
+// root-cause architecture pass. This is the component half of the layout engine:
+// it takes the placed widgets, renders them through the registry inside RGL's
+// Responsive grid, and at the fit breakpoint PAGINATES them like a phone home
+// screen — NEVER scrolling. All the load-bearing MATH (the page partition, the
+// fill-the-page rowHeight derivation, the tile-can't-straddle-a-page repair, the
+// per-page rebase) lives in lib/layoutEngine.ts (pure, unit-tested); this
+// component only wires RGL + a ResizeObserver to those functions.
 //
-// THE FIT MODEL (issue #73 iteration):
-//   • A PAGE = the grid rows that fit one viewport under the fixed chrome (and,
-//     when the stat strip is PINNED, under that strip too). computePagedRowHeight
-//     sizes a row so exactly `rowsPerPage` rows FILL the page → no scroll.
-//   • Widgets flow across pages: fill page 1, spill to page 2, … (clampToPages
-//     guarantees no tile straddles a boundary).
-//   • VIEW MODE shows exactly ONE page via a one-page-tall clip container
-//     translated by -activePage * pageHeight, with a prev/next + dots PAGER. No
-//     scrollbar anywhere.
+// THE FIT MODEL (issue #73 root-cause fix — each page is its OWN bounded grid):
+//   • The available band is measured ONCE: availH = viewportH − gridTop −
+//     pagerAllowance (− the pinned strip's height when shown). gridTop is the grid
+//     container's real getBoundingClientRect().top, which folds chrome + page
+//     padding + the gap into one DPI-independent CSS-pixel number.
+//   • computePageFit derives (R, rowHeight) from that band: R is the design
+//     rows-per-page (a 2×2 of charts → 2*CHART_ROWS), reduced only if the band is
+//     too short to give R rows a readable height; rowHeight = (availH −
+//     (R+1)*margin)/R so EXACTLY R rows fill availH → no scroll.
+//   • VIEW MODE renders ONLY the active page's widgets — that page's placements
+//     REBASED to local y=0 — in an RGL of height exactly availH with maxRows = R.
+//     There is NO clip window and NO translate: a tile cannot be sheared at a page
+//     boundary because each page IS its own grid that exactly fits. The pager
+//     (prev/next + dots) swaps which page's widgets are mounted.
 //   • CUSTOMIZE MODE renders the FULL canvas (all pages stacked) with vertical
 //     scroll + page-boundary guides, so every widget on every page is reachable
-//     and a tile can be dragged down past a boundary onto a later page; the saved
-//     placements are clamped to pages so view mode re-partitions cleanly.
+//     and a tile can be dragged down past a boundary onto a later page; on save
+//     each tile's page comes from its `y` (clampToPages keeps it straddle-free).
 //   • PINNED STAT STRIP (default on): the stat cards render in a fixed band above
 //     the paged grid (always visible, not paged); only charts/panels page below.
 //     Toggle it off and the stats become ordinary tiles that page with the rest.
@@ -32,18 +38,18 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Responsive, WidthProvider, type Layout, type Layouts } from 'react-grid-layout';
 import {
   BREAKPOINTS,
+  CHART_ROWS,
   COLS,
   DEFAULT_FIT_ROWS,
   PINNED_PAGE_ROWS,
   FIT_BREAKPOINT,
-  computePagedRowHeight,
-  computeRowsPerPage,
+  computePageFit,
   generateDefaultPlacements,
   mergePlacements,
   pageCount as computePageCount,
-  pageHeightPx,
   paginatePlacements,
   placementsEqual,
+  rebaseToLocal,
   type Breakpoint,
   type Placement,
   type Placements,
@@ -69,11 +75,11 @@ const MARGIN = 8;
 // slightly shorter charts over a stray scrollbar.
 const PAGER_ALLOWANCE = 44;
 
-// The NOMINAL fit rowHeight used only to decide HOW MANY rows fit one page
-// (rowsPerPage) before we recompute the exact height that fills the page. Picked
-// so the default cockpit (DEFAULT_FIT_ROWS rows) lands at one page on a 16:9
-// laptop: a ~36–44px row keeps charts (CHART_ROWS=7 → ~280px) readable.
-const NOMINAL_ROW_HEIGHT = 40;
+// The fixed, readable rowHeight used BELOW the fit breakpoint (the scrolling
+// breakpoints) and on the very first paint at fit before the band is measured. At
+// fit the rowHeight is DERIVED (computePageFit) so R rows exactly fill the band —
+// never this constant — so there's no nominal-row guessing in the fit math.
+const FALLBACK_ROW_HEIGHT = 40;
 
 export interface WidgetLayoutProps {
   // The widget ids to place, by category, IN ORDER — the host computes these
@@ -159,12 +165,28 @@ export function WidgetLayout(props: WidgetLayoutProps) {
   const [bp, setBp] = useState<Breakpoint>(FIT_BREAKPOINT);
 
   // ---- Runtime chrome + viewport measurement (the no-scroll fit) ----
-  // We measure the chrome height (everything ABOVE the grid) AND, when the stat
-  // strip is pinned, the pinned strip's own height, so the paged area's available
-  // band is computed — never a hand-tuned constant. The chrome ref is the parent
-  // region tagged [data-dashboard-chrome]; the pinned strip is our own element.
+  // We measure the GRID CONTAINER'S TOP (its viewport-relative y, in CSS pixels)
+  // AND, when the stat strip is pinned, the pinned strip's own height, so the
+  // paged area's available band is computed — never a hand-tuned constant.
+  //
+  // WHY gridTop, NOT chromeHeight (the header-cutoff fix, CHANGE 1): the previous
+  // math used `available = viewportH − chromeHeight − …`, but the grid does NOT
+  // begin at `chromeHeight` from the top of the viewport — it begins below the
+  // PAGE PADDING (the shell's `py-3`) AND the flex `gap` between the chrome and
+  // the grid. So `viewportH − chromeHeight` over-counted the band by exactly
+  // (pageTopPadding + gap) ≈ 20px: the fit math sized the page that much too tall,
+  // so at the no-scroll-pinned breakpoint the page's content ran 20px past the
+  // viewport and the bottom row (or, once a banner pushed the chrome down, the
+  // FIRST row) was clipped behind/under the fixed chrome. Measuring the
+  // container's real top via getBoundingClientRect().top folds the chrome height,
+  // the page padding AND the gap into one number, so `available = viewportH −
+  // gridTop − …` is exact regardless of how the chrome/padding/gap compose. It's a
+  // CSS-pixel quantity (getBoundingClientRect/innerHeight are DPI-independent —
+  // devicePixelRatio never enters the math), so it's robust across resolutions
+  // and DPIs (CHANGE 3). gridTop is read from the container itself (always present)
+  // rather than the chrome element, so a missing/late chrome can't zero it out.
   const [viewportH, setViewportH] = useState(0);
-  const [chromeH, setChromeH] = useState(0);
+  const [gridTop, setGridTop] = useState(0);
   const [stripH, setStripH] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
@@ -174,16 +196,38 @@ export function WidgetLayout(props: WidgetLayoutProps) {
     if (!container) return;
     const chrome = container.parentElement?.querySelector<HTMLElement>('[data-dashboard-chrome]') ?? null;
 
+    // Measure into state, but only WRITE when a value actually changed — the
+    // ResizeObserver fires on every layout pass (and our own re-renders resize the
+    // grid, which the observer sees), so an unconditional setState would churn and
+    // could feed a render→measure→render loop. The functional-update form compares
+    // against the latest committed value and returns it unchanged on a no-op, so
+    // React bails the re-render (the Customize-mode loop guard, kept intact).
     const measure = () => {
-      setViewportH(window.innerHeight);
-      setChromeH(chrome ? chrome.getBoundingClientRect().height : 0);
-      setStripH(stripRef.current ? stripRef.current.getBoundingClientRect().height : 0);
+      // The container's TOP measured WITHOUT its own paged-grid height influencing
+      // it: getBoundingClientRect().top is the distance from the viewport top to
+      // the grid column's first pixel — i.e. everything above it (chrome + page
+      // padding + gap). DPI-independent CSS pixels.
+      const top = container.getBoundingClientRect().top;
+      const sh = stripRef.current ? stripRef.current.getBoundingClientRect().height : 0;
+      const vh = window.innerHeight;
+      setViewportH((prev) => (prev === vh ? prev : vh));
+      // Round to whole CSS pixels so sub-pixel jitter from fractional DPI scaling
+      // (e.g. a 1.25× display reporting 127.5px) can't flip the value every frame
+      // and re-trigger the fit recompute → a quiet, change-only update.
+      setGridTop((prev) => (Math.abs(prev - top) < 0.5 ? prev : top));
+      setStripH((prev) => (Math.abs(prev - sh) < 0.5 ? prev : sh));
     };
     measure();
 
+    // Observe the chrome (so a banner appearing/dismissing remeasures the band)
+    // and the pinned strip; the container itself is NOT observed — its height is
+    // the fit OUTPUT, so observing it would close a measure→resize→measure loop.
     const ro = new ResizeObserver(measure);
     if (chrome) ro.observe(chrome);
     if (stripRef.current) ro.observe(stripRef.current);
+    // window.resize covers viewport-height changes (which a chrome ResizeObserver
+    // alone would miss — the chrome's height needn't change when the window does)
+    // AND DPI/zoom changes that reflow the layout (CHANGE 3: recompute on resize).
     window.addEventListener('resize', measure);
     return () => {
       ro.disconnect();
@@ -221,38 +265,36 @@ export function WidgetLayout(props: WidgetLayoutProps) {
     return minY > 0 ? kept.map((p) => ({ ...p, y: p.y - minY })) : kept;
   }, [layouts, gridIds, pinStats]);
 
-  // ---- The paged fit math (PURE functions from layoutEngine) ----
-  // available = viewport − chrome − (pinned strip, when shown). rowsPerPage is how
-  // many rows fit at the nominal height; rowHeight is then recomputed so those
-  // rows FILL the page (no scroll). The page row budget is DEFAULT_FIT_ROWS when
-  // stats page with the grid, or PINNED_PAGE_ROWS (just the chart rows) when the
-  // strip is pinned out of the paged area — so a page of charts still fills the
-  // viewport.
-  const available = Math.max(0, viewportH - chromeH - (pinStats ? stripH : 0) - PAGER_ALLOWANCE);
-  const rowsPerPage = useMemo(() => {
-    const budget = pinStats ? PINNED_PAGE_ROWS : DEFAULT_FIT_ROWS;
-    if (!fitActive || viewportH === 0) return budget;
-    // How many rows physically fit one viewport at the nominal height.
-    const fitted = computeRowsPerPage({ available, rowHeight: NOMINAL_ROW_HEIGHT, marginY: MARGIN });
-    // Cap at the design budget so the common case lands at the intended one-page
-    // cockpit (a band + two chart rows, or two chart rows when pinned) rather than
-    // squeezing a partial extra chart row in; but never below 1. On a SHORT
-    // viewport `fitted` may be < budget, and we honor that smaller page (it just
-    // paginates sooner) so a page always fills without scroll.
-    return Math.max(1, Math.min(fitted, budget));
-  }, [fitActive, viewportH, available, pinStats]);
+  // ---- The per-page bounded fit math (PURE computePageFit from layoutEngine) ----
+  // availH = viewport − everything above the grid (gridTop folds in chrome + page
+  // padding + the gap) − the pinned strip (when shown) − the pager band. Using
+  // gridTop (not a bare chrome height) is the header-cutoff fix: the grid is sized
+  // to EXACTLY the space below its own top, so the first row sits clear of the
+  // chrome and the last row stops at the viewport edge — no clip, no scroll.
+  const availH = Math.max(0, viewportH - gridTop - (pinStats ? stripH : 0) - PAGER_ALLOWANCE);
 
-  // The rowHeight: at the fit breakpoint, sized so `rowsPerPage` rows fill the
-  // available band exactly (no scroll). Otherwise a fixed, readable unit (the
-  // scrolling breakpoints + the fit breakpoint before the first measure).
-  const rowHeight = useMemo(() => {
-    if (!fitActive || viewportH === 0) return NOMINAL_ROW_HEIGHT;
-    return computePagedRowHeight({ available, rowsPerPage, marginY: MARGIN });
-  }, [fitActive, viewportH, available, rowsPerPage]);
+  // The DESIGN per-page row budget: DEFAULT_FIT_ROWS when stats page with the grid
+  // (a band + two chart rows), or PINNED_PAGE_ROWS (just the two chart rows) when
+  // the strip is pinned out of the paged area — so a page of charts still fills the
+  // viewport as a 2×2. computePageFit honours this budget but reduces it on a short
+  // viewport so the rows stay readable (it adapts, never scrolls).
+  const designRows = pinStats ? PINNED_PAGE_ROWS : DEFAULT_FIT_ROWS;
+
+  // (R, rowHeight) for the active page: R rows EXACTLY fill availH at rowHeight, so
+  // a page is viewport-tall with no scroll. Before the first measure (or below the
+  // fit breakpoint) we use the design budget + the fixed fallback row. When the
+  // stat strip is PINNED the paged area is pure CHART rows, so we quantize R to
+  // CHART_ROWS — a page holds a whole 2×2 / 1×2, never a partial chart row that
+  // would straddle a boundary and leave a wasted empty band. Unpinned, the page
+  // mixes a stat band with chart rows, so no quantum applies (default 1).
+  const { rows: rowsPerPage, rowHeight } = useMemo(() => {
+    if (!fitActive || viewportH === 0) return { rows: designRows, rowHeight: FALLBACK_ROW_HEIGHT };
+    return computePageFit({ availH, designRows, marginY: MARGIN, rowQuantum: pinStats ? CHART_ROWS : 1 });
+  }, [fitActive, viewportH, availH, designRows, pinStats]);
 
   // The page partition + count (only meaningful when fit-active). clampToPages (in
-  // paginatePlacements) guarantees no tile straddles a boundary; view mode shows
-  // one page, customize shows the whole (clamped) canvas.
+  // paginatePlacements) guarantees no tile straddles a boundary; view mode mounts
+  // one page (rebased to local y=0), customize shows the whole (clamped) canvas.
   const pages = useMemo(
     () => (fitActive ? paginatePlacements(gridLgPlacements, rowsPerPage) : []),
     [fitActive, gridLgPlacements, rowsPerPage]
@@ -268,19 +310,6 @@ export function WidgetLayout(props: WidgetLayoutProps) {
     // page). Done in an effect so we don't setState during render.
     if (activePage !== safePage) setActivePage(safePage);
   }, [activePage, safePage]);
-
-  // Two related page heights (view-mode clip + translate):
-  //   • pageH    — the CLIP window height: one full page = rowsPerPage rows + the
-  //     (rows+1) margins around them (RGL's container padding top/bottom + the
-  //     inter-row gaps). This is the band one page fills, ≈ the available height.
-  //   • pageStep — the TRANSLATE step between pages. RGL lays row r at top
-  //     `margin + r*(rowHeight+margin)`, so consecutive page bands (rpp rows
-  //     apart) are exactly `rowsPerPage*(rowHeight+margin)` apart — ONE margin
-  //     less than pageH (pageH double-counts the bottom margin as the next page's
-  //     top margin). Translating by pageStep (not pageH) keeps every page pixel-
-  //     aligned in the clip window, with no accumulating drift across pages.
-  const pageH = fitActive ? pageHeightPx({ rowsPerPage, rowHeight, marginY: MARGIN }) : 0;
-  const pageStep = fitActive ? rowsPerPage * (rowHeight + MARGIN) : 0;
 
   // ---- RGL change handler ----
   // RGL hands us the edited layout for the active breakpoint plus the full
@@ -368,52 +397,79 @@ export function WidgetLayout(props: WidgetLayoutProps) {
       // paged grid. shrink-0 so it keeps its measured height (the fit math
       // subtracts it from the available band). Not draggable — pinned by design;
       // unpin (Customize toggle) to rearrange them as tiles.
-      className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8"
+      // `ngrid-stat-strip` turns OFF the stat cards' size-containment here (see
+      // globals.css): in the pinned strip the cards must GROW to their natural
+      // content height (title + headline + bar + the possibly-wrapping sub line)
+      // so NOTHING is clipped — the strip is the cards' full presentation. Size
+      // containment (and the hide-the-detail container query) only applies to the
+      // RESIZABLE grid tiles, where the tile dictates the height. The CSS grid's
+      // equal rows make every card as tall as the tallest, so the band is uniform.
+      className="ngrid-stat-strip grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8"
     >
       {statIds.map((type) => (
-        <div key={type} className="min-h-0">
+        <div key={type} className="min-h-[6.25rem]">
           <WidgetCell type={type} host={host} customizing={false} onRemove={() => props.onRemoveWidget(type)} />
         </div>
       ))}
     </div>
   ) : null;
 
-  // ---- The RGL grid (the paged charts/panels, or the full canvas) ----
-  // VIEW MODE + fit: a one-page-tall clip window translated to the active page →
-  // exactly one page, NO scroll. CUSTOMIZE MODE: the full (clamped) canvas, with
-  // vertical scroll + page guides so every widget is reachable/editable. Below
-  // fit: height:auto and the page scrolls normally.
-  const gridLayouts: Placements = useMemo(() => {
+  // ---- The active page's OWN layout (the keystone: a bounded, rebased grid) ----
+  // VIEW MODE renders ONLY this page's widgets. paginatePlacements has already
+  // clamped every tile so it sits wholly within one page band; rebaseToLocal then
+  // subtracts the page's base row so the page's grid starts at y=0. Because we
+  // mount just these widgets in a grid whose height is exactly availH with
+  // maxRows = R, a tile CANNOT be clipped at a boundary — the page IS the grid.
+  const activePagePlacements = useMemo<Placement[]>(
+    () => (fitActive ? rebaseToLocal(pages[safePage] ?? [], rowsPerPage) : []),
+    [fitActive, pages, safePage, rowsPerPage]
+  );
+  const activePageIds = useMemo(() => activePagePlacements.map((p) => p.i), [activePagePlacements]);
+
+  // The FULL (clamped) canvas layouts for CUSTOMIZE / below-fit. At fit we feed the
+  // grid-only lg placements (clamped to pages so a dragged-across tile re-bands);
+  // below fit it's the merged per-breakpoint blob as-is (the page scrolls).
+  const canvasLayouts: Placements = useMemo(() => {
     if (!fitActive) return layouts;
-    // At the fit breakpoint feed RGL the grid-only lg placements (clamped), so the
-    // paged partition and the rendered children agree. Other breakpoints unused
-    // here (lg is the only fit breakpoint) but kept for RGL's responsive contract.
     const lg = clampToPagesSafe(gridLgPlacements, rowsPerPage);
     return { ...layouts, [FIT_BREAKPOINT]: lg };
   }, [fitActive, layouts, gridLgPlacements, rowsPerPage]);
 
-  // Which ids the RGL renders children for, and (view mode) which page they're on
-  // so we can mark off-page cells hidden (RGL still positions every child; we clip
-  // to the active page band by translating, and hide others for a11y/no-flicker).
-  const idToPage = useMemo(() => {
-    const m = new Map<string, number>();
-    pages.forEach((pg, i) => pg.forEach((p) => m.set(p.i, i)));
-    return m;
-  }, [pages]);
-
-  const grid = (
+  // A shared RGL builder so VIEW and CUSTOMIZE/scroll grids stay identical except
+  // for the few axes that differ (which layout + ids, draggable, maxRows). Both
+  // run FREE PLACEMENT (compactType=null + preventCollision) so tiles stay exactly
+  // where placed and gaps survive the round-trip. The persist handlers only fire
+  // on real gestures (drag/resize stop), so the static VIEW grid never persists.
+  const buildGrid = (opts: {
+    gridLayouts: Placements;
+    ids: string[];
+    draggable: boolean;
+    maxRows?: number;
+    gridKey?: string;
+  }) => (
     <ResponsiveGrid
+      key={opts.gridKey}
       className={`ngrid-rgl ${customizing ? 'is-customizing' : ''}`}
-      layouts={gridLayouts as unknown as Layouts}
+      layouts={opts.gridLayouts as unknown as Layouts}
       breakpoints={RGL_BREAKPOINTS}
       cols={RGL_COLS}
       rowHeight={rowHeight}
+      maxRows={opts.maxRows}
       margin={[MARGIN, MARGIN]}
       containerPadding={[MARGIN, MARGIN]}
-      isDraggable={customizing}
-      isResizable={customizing}
+      isDraggable={opts.draggable}
+      isResizable={opts.draggable}
       draggableCancel=".rgl-no-drag, button, a, input, label, select, textarea"
-      compactType="vertical"
+      // FREE PLACEMENT — the Android-home-screen model (CHANGE 2). compactType=null
+      // turns OFF RGL's auto-packing so a tile stays EXACTLY where it's dropped and
+      // empty cells/gaps between tiles are preserved (vertical compaction used to
+      // collapse every gap upward, which is what prevented free placement).
+      // preventCollision=true makes a drag/resize STOP if it would overlap another
+      // tile, so tiles can't stack on top of each other — they keep their own
+      // cells on the fixed 12-col × fit-rowHeight grid. Together: a fixed cell
+      // matrix you can drop tiles anywhere on, with the space between them intact.
+      compactType={null}
+      preventCollision
       onLayoutChange={onLayoutChange}
       onDragStop={(layout) => onGestureStop(layout)}
       onResizeStop={(layout) => onGestureStop(layout)}
@@ -421,31 +477,34 @@ export function WidgetLayout(props: WidgetLayoutProps) {
       measureBeforeMount={false}
       useCSSTransforms
     >
-      {gridIds.map((type) => {
-        // In fit VIEW mode, hide cells not on the active page so only one page's
-        // content is interactive/visible (the translate already clips them out).
-        const offPage = fitActive && !customizing && idToPage.get(type) !== safePage;
-        return (
-          <div key={type} className={`ngrid-rgl-item ${offPage ? 'pointer-events-none opacity-0' : ''}`} aria-hidden={offPage}>
-            <WidgetCell type={type} host={host} customizing={customizing} onRemove={() => props.onRemoveWidget(type)} />
-          </div>
-        );
-      })}
+      {opts.ids.map((type) => (
+        <div key={type} className="ngrid-rgl-item">
+          <WidgetCell type={type} host={host} customizing={opts.draggable} onRemove={() => props.onRemoveWidget(type)} />
+        </div>
+      ))}
     </ResponsiveGrid>
   );
 
-  // VIEW MODE (fit): clip to one page tall and translate to the active page → no
-  // scroll, one page shown. The inner grid is the full multi-page height; the clip
-  // window reveals just `pageH` and shifts by -safePage * pageH.
+  // VIEW MODE (fit): the active page's OWN bounded grid — its rebased placements,
+  // maxRows = R. No clip window, no translate. RGL sizes its OWN height to exactly
+  // R*rowHeight + (R+1)*margin, which computePageFit made == availH — so we let the
+  // RGL element define the box and only `shrink-0` the wrapper so the flex column
+  // can't squeeze it (squeezing would make the RGL content overflow a shorter
+  // parent by a few px). RGL is keyed by page so swapping pages cleanly remounts
+  // the page's children (no leftover positions from the previous page). Not
+  // draggable. The wrapper is min-h-0 so it never forces the column to scroll.
   const pagedView =
     fitActive && !customizing ? (
-      <div className="relative overflow-hidden" style={{ height: pageH }}>
-        <div
-          className="transition-transform duration-300 ease-out"
-          style={{ transform: `translateY(${-safePage * pageStep}px)` }}
-        >
-          {grid}
-        </div>
+      <div className="min-h-0 shrink-0">
+        {buildGrid({
+          gridLayouts: { [FIT_BREAKPOINT]: activePagePlacements },
+          ids: activePageIds,
+          draggable: false,
+          maxRows: rowsPerPage,
+          // Key by page so RGL fully remounts per page — no leftover internal
+          // layout/width state from the previously-shown page bleeds in.
+          gridKey: `page-${safePage}`,
+        })}
       </div>
     ) : null;
 
@@ -466,18 +525,20 @@ export function WidgetLayout(props: WidgetLayoutProps) {
         </>
       ) : fitActive && customizing ? (
         // Customize canvas: scrollable, with page-boundary guide lines so the user
-        // can see where each page breaks while dragging tiles across them.
+        // can see where each page breaks while dragging tiles across them. The
+        // guides sit at each page band's pixel offset (one band = R rows + their
+        // margins, the same height a VIEW page fills).
         <div className="ngrid-customize-canvas relative min-h-0 flex-1 overflow-y-auto">
           <PageGuides
             pageCount={Math.max(totalPages, computePageCount(gridLgPlacements, rowsPerPage))}
-            pageStep={pageStep}
+            pageStep={rowsPerPage * (rowHeight + MARGIN)}
           />
-          {grid}
+          {buildGrid({ gridLayouts: canvasLayouts, ids: gridIds, draggable: true })}
         </div>
       ) : (
         // Below the fit breakpoint (or comfortable density): the page scrolls
         // normally, no pager — today's mobile/md behaviour.
-        grid
+        buildGrid({ gridLayouts: canvasLayouts, ids: gridIds, draggable: customizing })
       )}
     </div>
   );

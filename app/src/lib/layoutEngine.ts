@@ -22,17 +22,25 @@
 
 // The responsive breakpoints, widest → narrowest, mirroring RGL's keys. We use
 // four (RFC §3.3: "lg ≥1280 / md / sm / xs"):
-//   • lg  ≥1280 — the NO-SCROLL fit cockpit (the `xl` band the old layout pinned
+//   • lg  ≥1232 — the NO-SCROLL fit cockpit (the `xl` band the old layout pinned
 //                 to the viewport). 12 columns.
 //   • md  ≥ 996 — wide-but-not-fit; page scrolls (today's 768–1280 two-up band's
 //                 upper half).
 //   • sm  ≥ 768 — the old two-column band's lower half; page scrolls.
 //   • xs  < 768 — MOBILE: a single column, page scrolls (today's <768 stack).
-// The pixel thresholds match Tailwind's md/xl so the responsive behaviour lines
-// up with the chrome's own breakpoints.
+//
+// THE lg THRESHOLD IS 1232, NOT 1280 (the page-lock boundary fix): the chrome
+// pins the page to the viewport at Tailwind's `xl` (≥1280 VIEWPORT px), but RGL's
+// WidthProvider selects the breakpoint from the grid CONTAINER width, which is the
+// viewport minus the shell's horizontal padding (`sm:px-5` = 40px) — so a 1280
+// viewport gives a ~1240px container. With lg at 1280 the 1280-viewport case fell
+// to `md` and the grid scrolled instead of paginating (the page-lock and the fit
+// grid disagreed at exactly the boundary). 1232 < 1240 ensures a 1280 viewport's
+// container lands on lg/fit, so the no-scroll paginated cockpit engages exactly
+// where the page lock does. md still covers 996–1231 container widths.
 export type Breakpoint = 'lg' | 'md' | 'sm' | 'xs';
 
-export const BREAKPOINTS: Record<Breakpoint, number> = { lg: 1280, md: 996, sm: 768, xs: 0 };
+export const BREAKPOINTS: Record<Breakpoint, number> = { lg: 1232, md: 996, sm: 768, xs: 0 };
 
 // Column count per breakpoint. lg uses a fine 12-col grid so the stat band (8
 // cards) and the chart/bills split land cleanly; the narrower breakpoints use
@@ -113,7 +121,10 @@ export interface DefaultLayoutInput {
 // the three-fact carbon sub line and the two-fuel YoY row don't wrap awkwardly.
 // A chart stays ~7 units (a comfortably tall plot).
 const STAT_ROWS = 3;
-const CHART_ROWS = 7;
+// Exported so WidgetLayout can pass it as computePageFit's `rowQuantum` — keeping
+// each fit page a whole number of CHART rows so the 2×2 aligns to page boundaries
+// (no partial chart row straddling a page → no wasted empty band).
+export const CHART_ROWS = 7;
 
 // Total grid rows at lg in the DEFAULT layout: one stat band + two chart rows.
 // This is the per-PAGE row budget the fit math sizes a row against so ONE page
@@ -173,8 +184,25 @@ function statBand(ids: string[], cols: number): { items: Placement[]; nextY: num
   return { items, nextY: y + STAT_ROWS };
 }
 
-// Generate the lg (12-col) cockpit: stat band on top, charts left two-up, bills
-// rail right spanning the chart block. This is the no-scroll fit arrangement.
+// Generate the lg (12-col) cockpit: stat band on top, then a 2×2 chart GRID
+// (half-width charts, two per row), with the bills panel below the charts. This
+// is the no-scroll PAGINATED fit arrangement.
+//
+// 2×2 DENSITY (issue #73 iteration, operator decision): the old layout put
+// charts in an 8-col left block two-up (w=4) alongside a 4-col bills rail, which
+// made each chart only 1/3-width and — at the pinned-strip per-page budget of
+// two chart rows — spread the 7 charts across ~5 sparse pages. The operator wants
+// the old cockpit density back: ~4 charts per page in a true 2×2 (like a phone
+// home screen, two columns × two rows of chart tiles). So charts now span HALF
+// the grid (w=6 of 12) two-up at x=0 / x=6, and a page-row budget of two chart
+// rows (PINNED_PAGE_ROWS = 2*CHART_ROWS) lands exactly four charts on a page. The
+// 7 charts therefore paginate to ~2 pages instead of ~5.
+//
+// The bills panel can no longer be a right rail (the charts use the full width),
+// so it sits as a full-width tile BELOW the charts; at the pinned per-page budget
+// it falls onto its own page band (clampToPages keeps it whole), staying readable
+// with its own internal scroll. Below the fit breakpoint (md/sm/xs) the page
+// scrolls, so the panel just stacks under the charts as before.
 function generateLg(input: DefaultLayoutInput): Placement[] {
   const cols = COLS.lg;
   const out: Placement[] = [];
@@ -189,11 +217,11 @@ function generateLg(input: DefaultLayoutInput): Placement[] {
   out.push(...stat.items);
   const afterStats = stat.nextY;
 
-  // Charts: left block, 8 of 12 cols, two-up (each 4 cols) so they pair into rows
-  // — the old 2×N fit cockpit. minH keeps a chart from being resized uselessly
-  // short; minW keeps a chart at least half the chart block.
-  const chartCols = 8;
-  const chartW = 4;
+  // Charts: a full-width 2×2 grid — each chart is HALF the grid (6 of 12 cols),
+  // two per row at x=0 / x=6, so two chart rows = four charts fill one page band
+  // (PINNED_PAGE_ROWS). minH keeps a chart from being resized uselessly short;
+  // minW=3 keeps a chart at least a quarter-width so a row of two stays sane.
+  const chartW = cols / 2; // 6 of 12 — half width, two-up
   input.chartIds.forEach((i, idx) => {
     out.push({
       i,
@@ -201,19 +229,23 @@ function generateLg(input: DefaultLayoutInput): Placement[] {
       y: afterStats + Math.floor(idx / 2) * CHART_ROWS,
       w: chartW,
       h: CHART_ROWS,
-      minW: 2,
+      minW: 3,
       minH: 2,
     });
   });
-  // How many chart rows the left block occupies (≥ two so the rail stretches the
-  // cockpit even with 0–2 charts, matching today's two-row fit grid).
-  const chartRowCount = Math.max(2, Math.ceil(input.chartIds.length / 2));
-  const chartBlockH = chartRowCount * CHART_ROWS;
+  // How many chart rows the 2-up block occupies (≥ one so the panel still lands
+  // below charts even with 0–2 charts). The bills panel goes on the row AFTER the
+  // last chart row.
+  const chartRowCount = Math.max(1, Math.ceil(input.chartIds.length / 2));
+  const afterCharts = afterStats + chartRowCount * CHART_ROWS;
 
-  // Bills rail: right block (12 − 8 = 4 cols), spanning the full chart block so
-  // it stretches to the cockpit height exactly like today's `align stretch` rail.
+  // Bills panel: a full-width (12-col) tile below the charts, one page-band tall
+  // (PINNED_PAGE_ROWS) so it occupies a clean page of its own under the pinned
+  // strip — it scrolls internally, so a full page of bills reads well. At the
+  // unpinned budget (DEFAULT_FIT_ROWS) it still fits within a band; clampToPages
+  // re-bands it whole if a partly-filled chart band would otherwise straddle.
   input.panelIds.forEach((i) => {
-    out.push({ i, x: chartCols, y: afterStats, w: cols - chartCols, h: chartBlockH, minW: 2, minH: 2 });
+    out.push({ i, x: 0, y: afterCharts, w: cols, h: PINNED_PAGE_ROWS, minW: 3, minH: 2 });
   });
   return out;
 }
@@ -440,6 +472,44 @@ export function placementRows(placements: Placement[] | undefined): number {
   return Math.max(1, ...placements.map((p) => p.y + p.h));
 }
 
+// Do two boxes (x/y/w/h cells) overlap on the grid? Used to find a collision-free
+// drop slot for a newly-added widget. Half-open intervals — tiles that merely
+// touch edge-to-edge ([0,6) and [6,12)) do NOT overlap. PURE.
+function boxesOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number }
+): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+// Find a free top-left cell for a new w×h tile on a `cols`-wide grid that already
+// holds `existing` placements, scanning rows top-to-bottom then columns left-to-
+// right (reading order). Returns the first {x, y} where the tile fits without
+// overlapping anything. With FREE PLACEMENT (compactType=null + preventCollision,
+// CHANGE 2) RGL no longer auto-tucks a tile dropped at (0,0), and would REJECT a
+// drop that collides — so an "add widget" must land the tile on an empty patch
+// itself. We always find a slot: a row below every existing tile is guaranteed
+// empty, so the scan terminates there at worst. PURE — hand-calc unit-tested.
+export function findFreeSlot(
+  existing: Placement[],
+  size: { w: number; h: number },
+  cols: number
+): { x: number; y: number } {
+  const w = Math.min(Math.max(1, size.w), cols);
+  const h = Math.max(1, size.h);
+  // Scan no further down than one row past the lowest existing tile — placing the
+  // new tile there is always collision-free (nothing lives below the layout).
+  const maxY = existing.length === 0 ? 0 : Math.max(...existing.map((p) => p.y + p.h));
+  for (let y = 0; y <= maxY; y++) {
+    for (let x = 0; x + w <= cols; x++) {
+      const candidate = { x, y, w, h };
+      if (!existing.some((p) => boxesOverlap(candidate, p))) return { x, y };
+    }
+  }
+  // Fallback (only reached if cols < w, which we already clamped): stack below all.
+  return { x: 0, y: maxY };
+}
+
 // ---------------------------------------------------------------------------
 // PAGINATION — the "phone home screen" no-scroll fit (issue #73 iteration).
 // ---------------------------------------------------------------------------
@@ -448,58 +518,102 @@ export function placementRows(placements: Placement[] | undefined): number {
 // any overflow is reached via PAGES (prev/next + dots), like a phone home
 // screen — fill page 1, spill to page 2, etc. So instead of letting the grid
 // region scroll, we:
-//   1. decide how many grid ROWS fit one viewport page (`rowsPerPage`),
-//   2. size the rowHeight so exactly that many rows FILL the page (no scroll),
-//   3. partition the placements into pages by their row band (page = floor(y /
+//   1. derive (R rows-per-page, rowHeight) from the measured band so exactly R
+//      rows FILL one viewport page with no scroll (`computePageFit`),
+//   2. partition the placements into pages by their row band (page = floor(y /
 //      rowsPerPage)), clamping any tile so it sits WHOLLY within one page,
-//   4. render only the active page (WidgetLayout translates a one-page-tall
-//      clip container by -activePage * pageHeight).
+//   3. render only the active page as its OWN bounded grid — WidgetLayout mounts
+//      just that page's widgets, rebased to local y=0 (`rebaseToLocal`), in an RGL
+//      of height exactly the band with maxRows = R. NO clip window, NO translate:
+//      a tile can't be sheared at a boundary because the page IS the grid.
 // All the arithmetic is here, PURE + hand-calc unit-tested; WidgetLayout only
 // wires the measured viewport/chrome to it and renders the active page + pager.
 
-// How many whole grid rows fit in the available band, given a row height and the
-// inter-row margin. RGL stacks a page of `n` rows as n*rowHeight + (n+1)*margin
-// (a margin above the first row, below the last, and between each — we fold the
-// container padding into the margin, the same assumption computeFitRowHeight
-// makes). Solving n*rh + (n+1)*m ≤ available for n:
-//   n ≤ (available − m) / (rh + m)
-// We floor to whole rows and clamp to ≥1 so a tiny viewport still yields one row
-// per page (it just shows a single squashed row rather than zero). PURE.
-export function computeRowsPerPage(opts: {
-  available: number; // viewportHeight − chrome − pinnedStripHeight (px)
-  rowHeight: number; // px per grid row
-  marginY: number; // px gap; (n+1) of them per page
-}): number {
-  const { available, marginY } = opts;
-  const rowHeight = Math.max(MIN_ROW_HEIGHT, opts.rowHeight);
-  const n = Math.floor((available - marginY) / (rowHeight + marginY));
-  return Math.max(1, n);
+// ---------------------------------------------------------------------------
+// THE KEYSTONE FIT DERIVATION (issue #73 root-cause architecture fix).
+// ---------------------------------------------------------------------------
+//
+// The OLD model laid out ONE tall RGL canvas (every page stacked) and, in view
+// mode, revealed one page via a fixed-height clip window TRANSLATED by
+// −page*pageStep. That clip/translate machinery is the root of the layout bugs:
+//   • a tile straddling a page boundary got visually CLIPPED (graph bottoms cut
+//     off, the bills top sheared), because the clip window had a hard pixel edge
+//     the tile crossed; and
+//   • `pageH` (clip height), `pageStep` (translate step) and RGL's real row-band
+//     spacing kept disagreeing by a margin here or there, so pages drifted, left
+//     dead bands, or over-counted the page total.
+//
+// THE FIX — each page is its OWN bounded grid. WidgetLayout now renders ONLY the
+// active page's widgets, rebased to local y=0, in an RGL of height EXACTLY the
+// available band with `maxRows = R`. There is no clip and no translate, so a tile
+// physically cannot be sheared at a boundary: the page IS the grid and it fits.
+//
+// `computePageFit` is the single source for (R, rowHeight) from the measured
+// band. It honours a DESIGN row budget (a 2×2 of charts → 2*CHART_ROWS), but
+// ADAPTS rather than scrolls: if the band is too short to give those rows a
+// readable height (rowHeight would fall below MIN_ROW_HEIGHT), it reduces R until
+// the rows fit at ≥ the floor. The returned rowHeight then makes exactly R rows
+// FILL the band: R*rowHeight + (R+1)*margin == availH, so the page is
+// viewport-tall with no scroll.
+//
+// `rowQuantum` keeps the page budget a MULTIPLE of one widget-row's height (e.g.
+// CHART_ROWS) when adapting, so a page always holds WHOLE chart rows — never a
+// partial row that would straddle a boundary and leave a wasted empty band on the
+// next page (the bug the old clip/translate model also hit). We step R DOWN by the
+// quantum (a 2×2 → one chart row → a 1×2), and only below a single chart row drop
+// to a sub-quantum R for a pathologically short viewport. We never grow R past the
+// design budget — the common laptop case must land on the intended one-page
+// cockpit, not squeeze a partial extra row in. PURE — hand-calc unit-tested.
+export function computePageFit(opts: {
+  availH: number; // the measured band one page must fill (px)
+  designRows: number; // the desired rows-per-page (e.g. 2*CHART_ROWS for a 2×2)
+  marginY: number; // RGL's inter-row gap (also the container padding)
+  rowQuantum?: number; // keep R a multiple of this (e.g. CHART_ROWS) — default 1
+}): { rows: number; rowHeight: number } {
+  const { availH, marginY } = opts;
+  const design = Math.max(1, Math.floor(opts.designRows));
+  const quantum = Math.max(1, Math.floor(opts.rowQuantum ?? 1));
+  // The exact fill height for a given R: the row that makes R rows fill the band
+  // with no scroll, (availH − (R+1)*margin)/R.
+  const fillHeight = (rows: number) => (availH - (rows + 1) * marginY) / rows;
+  // 1) Step DOWN by whole quanta from the design budget (snapped to a quantum
+  //    multiple), accepting the first (largest) whose fill height clears the
+  //    readable floor. Whole-quantum pages keep the 2×2 / 1×2 aligned to page
+  //    boundaries, so no partial chart row straddles → no wasted empty band.
+  const snapped = design - (design % quantum);
+  for (let rows = Math.max(quantum, snapped); rows >= quantum; rows -= quantum) {
+    const rh = fillHeight(rows);
+    if (rh >= MIN_ROW_HEIGHT) return { rows, rowHeight: rh };
+  }
+  // 2) Even one quantum (a single chart row) can't reach the floor → fall to a
+  //    sub-quantum R so SOMETHING still fills the band; step down to 1, clamping
+  //    the last row to the floor (it then scrolls a hair — the documented graceful
+  //    degradation on a pathologically short viewport).
+  for (let rows = quantum - 1; rows >= 1; rows--) {
+    const rh = fillHeight(rows);
+    if (rh >= MIN_ROW_HEIGHT || rows === 1) {
+      return { rows, rowHeight: Math.max(MIN_ROW_HEIGHT, rh) };
+    }
+  }
+  // Unreachable (the loops always return); keeps TS exhaustive.
+  return { rows: 1, rowHeight: MIN_ROW_HEIGHT };
 }
 
-// Given a fixed per-page row budget (`rowsPerPage`) and the available band, size
-// the rowHeight so those rows EXACTLY fill the page → the active page is full-
-// height with no scroll (the no-scroll guarantee, now per page rather than for
-// the whole layout). This is computeFitRowHeight specialized to "the rows of one
-// page", so the two stay in lock-step. PURE.
-export function computePagedRowHeight(opts: {
-  available: number; // the band one page fills (px)
-  rowsPerPage: number;
-  marginY: number;
-}): number {
-  return computeFitRowHeight({
-    viewportHeight: opts.available,
-    measuredChrome: 0,
-    rows: opts.rowsPerPage,
-    marginY: opts.marginY,
-  });
-}
-
-// The pixel height of one page = rowsPerPage rows + their (rows+1) margins. This
-// is the translate step WidgetLayout shifts the clip container by per page, and
-// equals the available band when computePagedRowHeight sized the row. PURE.
-export function pageHeightPx(opts: { rowsPerPage: number; rowHeight: number; marginY: number }): number {
-  const rows = Math.max(1, Math.floor(opts.rowsPerPage));
-  return rows * opts.rowHeight + (rows + 1) * opts.marginY;
+// Rebase a single page's placements so the page's TOP row becomes local y=0 — the
+// page's own grid starts at the origin (no leftover offset from the pages above
+// it). The page partition (paginatePlacements) keys a tile to a page by its
+// GLOBAL row band; once we render that page as a standalone grid we subtract the
+// band's base row so the tile sits at its in-page position. Idempotent on a page
+// whose min-y is already 0. PURE — hand-calc unit-tested.
+export function rebaseToLocal(page: Placement[], rowsPerPage: number): Placement[] {
+  const rpp = Math.max(1, Math.floor(rowsPerPage));
+  if (page.length === 0) return page;
+  // The page's base row is the band of its top-most tile (floor(minY / rpp) *
+  // rpp) — NOT just min(y), so a page whose first tile starts a few rows into its
+  // band keeps that intra-band offset (the gap above it survives the round-trip).
+  const minY = Math.min(...page.map((p) => p.y));
+  const base = Math.floor(minY / rpp) * rpp;
+  return base > 0 ? page.map((p) => ({ ...p, y: p.y - base })) : page;
 }
 
 // How many pages a set of placements spans, given the per-page row budget: the

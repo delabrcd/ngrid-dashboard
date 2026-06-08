@@ -45,8 +45,10 @@ const tooltipRing = (accent: StatTooltip['accent']) =>
 export function StatCard({ model }: { model: StatCardModel }) {
   return (
     // h-full so the card fills its placed grid cell (Phase E, #73); the content
-    // stays top-aligned. Markup is otherwise byte-identical to the old card.
-    <div className={`card h-full !p-3${model.tooltip ? ' relative' : ''}`}>
+    // stays top-aligned. `stat-card` makes the card a CSS QUERY CONTAINER and
+    // `overflow-hidden` clips it to its tile so content can never spill out
+    // (issue #73 content-fit). Markup is otherwise byte-identical to the old card.
+    <div className={`stat-card card h-full overflow-hidden !p-3${model.tooltip ? ' relative' : ''}`}>
       <div className={`card-title text-xs${model.tooltip ? ' flex items-center gap-1' : ''}`}>
         {model.title}
         {model.tooltip ? <InfoDot tooltip={model.tooltip.text} ring={tooltipRing(model.tooltip.accent)} /> : null}
@@ -61,7 +63,10 @@ export function StatCard({ model }: { model: StatCardModel }) {
           </>
         )}
       </div>
-      <div className="sub mt-0.5 text-[11px] text-slate-500">{model.sub}</div>
+      {/* The OPTIONAL detail line. `stat-detail` is hidden by a CSS container
+          query when the card is too short to fit it (globals.css), so the sub
+          text NEVER overflows the tile — title + headline always remain. */}
+      <div className="stat-detail sub mt-0.5 text-[11px] text-slate-500">{model.sub}</div>
     </div>
   );
 }
@@ -85,7 +90,7 @@ export function YoyStatCard({ model, openTools }: { model: YoyStatModel; openToo
       tabIndex={0}
       onClick={() => openTools('compare')}
       onKeyDown={activate(() => openTools('compare'))}
-      className="card relative h-full cursor-pointer !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+      className="stat-card card relative h-full cursor-pointer overflow-hidden !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
     >
       <div className="card-title flex items-center gap-1 text-xs">
         vs last year
@@ -103,7 +108,7 @@ export function YoyStatCard({ model, openTools }: { model: YoyStatModel; openToo
           </span>
         ) : null}
       </div>
-      <div className="sub mt-0.5 text-[11px] text-slate-500">weather-adjusted vs last year · click to compare</div>
+      <div className="stat-detail sub mt-0.5 text-[11px] text-slate-500">weather-adjusted vs last year · click to compare</div>
     </div>
   );
 }
@@ -117,7 +122,7 @@ export function BudgetStatCard({ model, openTools }: { model: BudgetStatModel; o
       tabIndex={0}
       onClick={() => openTools('budget')}
       onKeyDown={activate(() => openTools('budget'))}
-      className="card relative h-full cursor-pointer !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+      className="stat-card stat-card-budget card relative h-full cursor-pointer overflow-hidden !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
     >
       <div className="card-title flex items-center gap-1 text-xs">
         Budget {model.fromY}
@@ -136,7 +141,7 @@ export function BudgetStatCard({ model, openTools }: { model: BudgetStatModel; o
         </div>
         <div className="absolute inset-y-0 w-px bg-slate-300/80" style={{ left: `${model.targetPct}%` }} />
       </div>
-      <div className={`sub mt-0.5 text-[11px] ${model.statusColor}`}>{model.statusLabel} · click for breakdown</div>
+      <div className={`stat-detail sub mt-0.5 text-[11px] ${model.statusColor}`}>{model.statusLabel} · click for breakdown</div>
     </div>
   );
 }
