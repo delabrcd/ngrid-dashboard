@@ -123,7 +123,8 @@ jobs:
           echo "::error::server never started (root / not 200)"; docker logs boot | tail -80; exit 1
 
       - name: Seed representative data
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f .github/migration-safety/seed.sql
+        # Strip the Prisma-only ?schema=public param — libpq/psql rejects it.
+        run: psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f .github/migration-safety/seed.sql
 
       - name: Assert /api/overview is healthy and serves data
         run: |
