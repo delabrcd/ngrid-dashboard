@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { MonthRow } from '@/lib/chartSpec';
+import type { YoyResult } from '@/lib/series';
 import { resolveSelectedAccountId, type AccountSummary } from '@/lib/accountSwitcher';
 import { usePrefs } from '@/lib/prefs';
 import { useScrapeProgress } from './ScrapeProgress';
@@ -38,6 +39,11 @@ export interface Overview {
     gallonsGasoline: number;
     treeYears: number;
   } | null;
+  // Year-over-year weather-normalized comparison (issue #47): per-fuel raw vs
+  // weather-explained vs normalized-intensity deltas + a current-rate normalized
+  // cost view. Computed purely server-side (compareYoY); null without a full
+  // prior-year window to compare against.
+  yoy?: YoyResult | null;
   latestBill?: { statementDate: string; totalDueAmount: number | null } | null;
   firstStatement?: string | null;
   schedule?: { predictedNextBillDate: string | null; nextCheckAt: string | null; lastCheckedAt: string | null } | null;

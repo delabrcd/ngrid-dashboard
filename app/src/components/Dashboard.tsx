@@ -24,6 +24,7 @@ import { ScrapeProgressBanner } from './ScrapeProgress';
 import { RangeControl } from './RangeControl';
 import { NgLoginsSection } from './NgLoginsSection';
 import { CockpitPager } from './CockpitPager';
+import { YoyPanel } from './YoyPanel';
 import { useDashboardData } from './useDashboardData';
 import { dateLabel, estimateTooltip, num, rate, relativeFromNow, usd } from '@/lib/format';
 
@@ -424,6 +425,15 @@ export function Dashboard() {
               </div>
             ) : null}
           </div>
+
+          {/* Year-over-year weather-normalized verdict (issue #47): a sentence
+              per fuel ("X% more kWh, but Y% degree-days — ~Z% lower after
+              normalizing") plus the raw/weather/behaviour breakdown and an
+              honest current-rate cost figure. All math is server-side (pure
+              compareYoY); this is a thin panel. Hidden when there's no full
+              prior-year window to compare. Tucked behind "fit" density to avoid
+              stealing the pinned-viewport chart space. */}
+          {ov?.yoy && !fit ? <YoyPanel yoy={ov.yoy} currencyDecimals={dp} /> : null}
 
           {/* Main region: charts grid + bills rail. At ≥xl in "fit" density the
               charts carry explicit (100dvh-derived) heights so the three rows add

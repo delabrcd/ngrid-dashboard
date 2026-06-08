@@ -1,4 +1,5 @@
 // Client-safe formatting helpers.
+import type { YoyFuelResult } from './series';
 export const usd = (n: number | null | undefined, dp = 2): string =>
   n == null ? '—' : `$${n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })}`;
 
@@ -45,3 +46,34 @@ export const estimateTooltip = (basis: string | null | undefined): string => {
   const b = (basis ?? '').trim();
   return b ? `Estimated from ${b}. Not a real charge.` : 'Estimated. Not a real charge.';
 };
+
+// Signed whole-percent label from a fraction (0.062 -> "+6%", -0.071 -> "−7%",
+// null -> "—"). Uses a true minus sign to match the rest of the UI.
+export const signedPct = (frac: number | null | undefined): string => {
+  if (frac == null) return '—';
+  const p = Math.round(frac * 100);
+  return p > 0 ? `+${p}%` : p < 0 ? `−${Math.abs(p)}%` : '0%';
+};
+
+// One-sentence year-over-year weather-normalized verdict for a fuel (issue #47).
+// PURE — the arithmetic already happened in compareYoY; this only phrases the
+// per-fuel result, e.g. "Electric: +6% kWh, but +14% degree-days — ~7% lower
+// after normalizing." Falls back gracefully when a percentage can't be computed
+// (zero prior-year base). `unit` is the usage unit ("kWh" / "therms").
+export function yoyVerdict(res: YoyFuelResult, fuelLabel: string, unit: string): string {
+  const raw = signedPct(res.rawUsagePct);
+  const dd = signedPct(res.ddPct);
+  // The clause that carries the answer: same magnitude as normalizedPct but
+  // phrased as the human takeaway (used less / more / about the same).
+  let verdict: string;
+  if (res.normalizedPct == null) {
+    verdict = 'normalized change unavailable';
+  } else {
+    const p = Math.round(res.normalizedPct * 100);
+    verdict =
+      p < 0 ? `~${Math.abs(p)}% lower after normalizing`
+        : p > 0 ? `~${p}% higher after normalizing`
+          : 'about flat after normalizing';
+  }
+  return `${fuelLabel}: ${raw} ${unit}, but ${dd} degree-days — ${verdict}.`;
+}
