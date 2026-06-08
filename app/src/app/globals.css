@@ -91,3 +91,45 @@ body {
   border-bottom: 2px solid rgba(245, 158, 11, 0.85);
   border-bottom-right-radius: 2px;
 }
+
+/* ── Stat-card content fit (issue #73) ─────────────────────────────────────
+   The operator's rule: a stat card's title + headline (+ the budget progress
+   bar) must ALWAYS show, the optional detail/sub line hides when the tile is too
+   short, and text NEVER flows off the card. We do this DECLARATIVELY with a CSS
+   container query — no JS measuring, no setTimeout band-aid: the card is a
+   size query container, and `.stat-detail` is hidden when the card's own height
+   drops below the threshold at which the detail line would fit.
+
+   The thresholds MIRROR lib/widgets/cardFit.ts (the single source for the
+   arithmetic). A CSS `@container (max-height: …)` query measures the query
+   container's CONTENT box (NOT its border box), so the thresholds here are the
+   CONTENT-box values cardFit.contentDetailThresholdPx() returns —
+   detailHeightPx − the card's vertical padding: simple = 88 − 24 = 64px,
+   budget = 100 − 24 = 76px (the budget card reserves a progress bar, so its sub
+   line hides a little earlier). We hide one px below those so the line is gone the
+   moment it wouldn't fully fit. `overflow-hidden` on the card (set in
+   StatCard.tsx) is the hard backstop: even mid-threshold the card clips to its
+   tile, so text can never spill out. */
+.stat-card {
+  container-type: size;
+}
+/* In the PINNED stat strip the cards must grow to their natural content height so
+   nothing is clipped (the strip is their full presentation). Turning containment
+   off here also stops the hide-the-detail query from matching, so the strip always
+   shows the complete card. Size containment + the query stay active for the
+   resizable RGL grid tiles, where the tile dictates the height. */
+.ngrid-stat-strip .stat-card {
+  container-type: normal;
+}
+@container (max-height: 63px) {
+  .stat-card .stat-detail {
+    display: none;
+  }
+}
+/* The budget card's bar is essential, so its sub line hides a little earlier
+   (a taller threshold) — its dedicated class wins via specificity/order. */
+@container (max-height: 75px) {
+  .stat-card-budget .stat-detail {
+    display: none;
+  }
+}

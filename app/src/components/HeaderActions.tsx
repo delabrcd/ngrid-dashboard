@@ -180,7 +180,7 @@ export function HeaderActions(props: HeaderActionsProps) {
       {/* DESKTOP (≥sm): the inline button cluster, unchanged from before — same
           buttons, same order, same styling. `hidden sm:flex` so it only shows once
           the row comfortably fits (it never wraps; the hamburger covers narrower). */}
-      <div className="hidden items-center justify-end gap-2 sm:flex">
+      <div className="hidden shrink-0 items-center justify-end gap-2 sm:flex">
         {canCustomize && <CustomizeButton customizing={customizing} onToggle={onToggleCustomize} />}
         {!empty && <NotificationsBell accountId={accountId} bills={bills} onOpenCompare={onOpenTools} />}
         {!empty && (
@@ -203,7 +203,7 @@ export function HeaderActions(props: HeaderActionsProps) {
       {/* MOBILE (<sm): the notifications bell stays visible (compact, own dropdown)
           alongside a ☰ hamburger that opens a dropdown with the rest. `flex sm:hidden`
           so it replaces the inline cluster only on narrow screens — no overflow. */}
-      <div className="flex items-center justify-end gap-2 sm:hidden">
+      <div className="flex shrink-0 items-center justify-end gap-2 sm:hidden">
         {!empty && <NotificationsBell accountId={accountId} bills={bills} onOpenCompare={onOpenTools} />}
         <div className="relative" ref={wrapRef}>
           <button

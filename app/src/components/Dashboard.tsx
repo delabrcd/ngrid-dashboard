@@ -392,11 +392,17 @@ export function Dashboard() {
           fit (replacing the FILL_BODY_CLASSES constant). Everything inside here
           is layout the user can't drag; the draggable grid lives below it. */}
       <div data-dashboard-chrome className="flex shrink-0 flex-col gap-3 xl:gap-2">
-        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold tracking-tight text-slate-50">National Grid Dashboard</h1>
-              <span className="rounded-full border border-slate-700/70 bg-slate-800/50 px-2 py-0.5 font-mono text-xs text-slate-400">
+        {/* HARD TOP-RIGHT ACTIONS (issue #73 mobile fix): a NO-WRAP row with the
+            title/account block on the left and the action area on the right. The
+            title block is `min-w-0` so it can SHRINK and truncate; the action area
+            is `shrink-0` and anchored right via `justify-between`, so the hamburger
+            (mobile) / inline buttons (≥sm) can NEVER wrap to a new line or drift
+            left — other content yields to it. */}
+        <header className="flex flex-nowrap items-center justify-between gap-x-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-lg font-bold tracking-tight text-slate-50 sm:text-xl">National Grid Dashboard</h1>
+              <span className="hidden shrink-0 rounded-full border border-slate-700/70 bg-slate-800/50 px-2 py-0.5 font-mono text-xs text-slate-400 sm:inline">
                 v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}
               </span>
             </div>
@@ -408,7 +414,7 @@ export function Dashboard() {
               />
             ) : (
               ov?.account && (
-                <p className="text-sm text-slate-400">
+                <p className="hidden min-w-0 truncate text-sm text-slate-400 sm:block">
                   Account {ov.account.accountNumber}
                   {ov.account.serviceAddress ? ` · ${ov.account.serviceAddress}` : ''}
                   {ov.account.companyCode ? ` · ${ov.account.companyCode}` : ''}
@@ -457,19 +463,28 @@ export function Dashboard() {
           </div>
         )}
 
-        {/* Control strip: range picker + schedule pills. */}
+        {/* Control strip: range picker + schedule pills. On a phone these must
+            stay TIDY (issue #73): the range presets keep their own segmented row,
+            and the schedule pills flow as a compact WRAPPING row (never one-per-
+            line). The strip wraps as a whole at narrow widths so the schedule
+            group drops below the range group rather than overflowing sideways, and
+            each pill is `whitespace-nowrap` so a pill stays intact while the ROW
+            (not the pill) wraps. The "Next bill" relative-time parenthetical is
+            hidden below sm so the pill stays short on a phone. */}
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           {!empty && (
             <RangeControl range={prefs.range} onChange={setRange} allYms={allYms} nowYm={nowYm} />
           )}
           {ov?.schedule && (
-            <div className="flex flex-wrap gap-2">
-              <span className="pill">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <span className="pill whitespace-nowrap">
                 Next bill <strong className="text-slate-100">{dateLabel(ov.schedule.predictedNextBillDate)}</strong>
-                {ov.schedule.predictedNextBillDate ? ` (${relativeFromNow(ov.schedule.predictedNextBillDate + 'T00:00:00')})` : ''}
+                {ov.schedule.predictedNextBillDate ? (
+                  <span className="hidden sm:inline"> ({relativeFromNow(ov.schedule.predictedNextBillDate + 'T00:00:00')})</span>
+                ) : null}
               </span>
-              <span className="pill">Checked {relativeFromNow(ov.schedule.lastCheckedAt)}</span>
-              <span className="pill">Next {relativeFromNow(ov.schedule.nextCheckAt)}</span>
+              <span className="pill whitespace-nowrap">Checked {relativeFromNow(ov.schedule.lastCheckedAt)}</span>
+              <span className="pill whitespace-nowrap">Next {relativeFromNow(ov.schedule.nextCheckAt)}</span>
             </div>
           )}
         </div>
