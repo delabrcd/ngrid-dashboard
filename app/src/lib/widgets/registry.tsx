@@ -17,25 +17,33 @@
 //     only routes a spec to its renderer.
 
 import type { ReactNode } from 'react';
-import { CHART_SPECS, type ChartSpec, type MonthRow } from '@/lib/chartSpec';
+import { CHART_SPECS, type ChartSpec } from '@/lib/chartSpec';
+import type { DatasetId, DatasetResolver } from '@/lib/datasets';
+import { getVizRenderer } from '@/lib/widgets/vizRenderers';
 import { STAT_SPECS, type StatData, type StatSpec } from '@/lib/widgets/statSpec';
-import { ConfigurableChart } from '@/components/ConfigurableChart';
 import { BudgetStatCard, StatCard, YoyStatCard } from '@/components/widgets/StatCard';
 import type { ToolsTab } from '@/components/ToolsModal';
 
-// The host context every widget render can read. Phase A keeps charts and stats
-// on their existing, separate data sources (the dataset abstraction is Phase B),
-// so the host hands each kind exactly what its old JSX consumed:
-//   • chart widgets: the spec/rows adapter (preserves #71/#52 projection logic)
-//     plus the fill/height layout knobs Dashboard already passes ConfigurableChart.
+// The host context every widget render can read.
+//   • chart widgets (Phase B, #94): they declare a `dataset` dependency and the
+//     host RESOLVES it → rows (`resolveDataset`). For `'monthly'` the resolver
+//     returns the SAME projection-aware `MonthRow[]` Dashboard.chartRows() built,
+//     so the #71 spec-stripping + #52/#71 forward-projection append stay in one
+//     place and the output is byte-identical. The spec the renderer draws still
+//     comes from `specFor` (it carries the #71 proj*-series stripping), plus the
+//     fill/height layout knobs Dashboard already passed ConfigurableChart.
 //   • stat widgets: the StatData bag + the openTools callback for the two
-//     clickable cards.
+//     clickable cards (unchanged from Phase A; routing stats through the dataset
+//     layer is a later, opt-in change — see datasets.ts).
 export interface WidgetHost {
-  // Chart adapters — IDENTICAL to Dashboard.tsx's specFor()/chartRows(), passed
-  // in so the projection stripping/append stays in one place and the rendered
-  // output is unchanged.
+  // Dataset resolution (Phase B) — given a DatasetId + the widget id, returns
+  // that dataset's rows. The chart widget consumes its declared `spec.dataset`
+  // through this, never assuming `MonthRow` directly.
+  resolveDataset: DatasetResolver;
+  // The (possibly projection-stripped) spec to draw — IDENTICAL to
+  // Dashboard.tsx's specFor(); kept so the #71 stripping stays in one place and
+  // the rendered output is unchanged.
   specFor: (id: string) => ChartSpec;
-  chartRows: (id: string) => MonthRow[];
   chartFill: boolean;
   chartHeight: number;
   // Stat inputs.
@@ -50,29 +58,41 @@ export interface WidgetDef {
   type: string; // registry key
   category: 'chart' | 'stat' | 'tool' | 'panel';
   title: string;
+  // The datasets this widget consumes (RFC §3.1 `dataDeps`). The host provides
+  // these — a chart-widget declares `[spec.dataset]` and pulls its rows from the
+  // resolver. Stat widgets read the `ov` bag off the host directly in Phase A,
+  // so they declare none yet (`[]`).
+  dataDeps: DatasetId[];
   defaultSize: { w: number; h: number };
   render: (host: WidgetHost) => ReactNode;
 }
 
-// Build a chart-widget for one ChartSpec. The render reuses ConfigurableChart
-// exactly as Dashboard did, pulling the (possibly projection-stripped) spec and
-// the (possibly projection-appended) rows from the host adapter so output is
-// byte-identical. `key`/wrapper div are the caller's responsibility (it controls
-// the grid cell), matching the old `.map((id) => <div key={id}>…)` structure.
+// Build a chart-widget for one ChartSpec. The render now (Phase B, #94):
+//   1. declares `dataDeps: [spec.dataset]` so the layer knows what data it needs,
+//   2. RESOLVES that dataset through the host (for `'monthly'` → the same
+//      projection-appended `MonthRow[]` Dashboard.chartRows() produced), and
+//   3. dispatches on `spec.vizType` to the matching renderer (only `'timeseries'`
+//      exists — the existing ConfigurableChart).
+// The (possibly projection-stripped) spec still comes from `host.specFor`, so the
+// #71/#52 logic is unchanged and the output is byte-identical. `key`/wrapper div
+// stay the caller's concern, matching the old `.map((id) => <div key={id}>…)`.
 function chartWidget(spec: ChartSpec): WidgetDef {
   return {
     type: `chart:${spec.id}`,
     category: 'chart',
     title: spec.title,
+    dataDeps: [spec.dataset],
     defaultSize: { w: 1, h: 1 },
-    render: (host) => (
-      <ConfigurableChart
-        spec={host.specFor(spec.id)}
-        rows={host.chartRows(spec.id)}
-        fill={host.chartFill}
-        height={host.chartHeight}
-      />
-    ),
+    render: (host) => {
+      const drawn = host.specFor(spec.id);
+      const rows = host.resolveDataset(drawn.dataset, spec.id);
+      return getVizRenderer(drawn.vizType)({
+        spec: drawn,
+        rows,
+        fill: host.chartFill,
+        height: host.chartHeight,
+      });
+    },
   };
 }
 
@@ -85,6 +105,9 @@ function statWidget(spec: StatSpec): WidgetDef {
     type: `stat:${spec.id}`,
     category: 'stat',
     title: spec.id,
+    // Stat widgets read the `ov` bag off the host directly (Phase A); routing
+    // them through the dataset layer is a later, opt-in change. No deps yet.
+    dataDeps: [],
     defaultSize: { w: 1, h: 1 },
     render: (host) => {
       const d = host.statData;
