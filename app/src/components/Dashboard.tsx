@@ -25,6 +25,8 @@ import { RangeControl } from './RangeControl';
 import { NgLoginsSection } from './NgLoginsSection';
 import { CockpitPager } from './CockpitPager';
 import { ToolsModal, type ToolsTab } from './ToolsModal';
+import { NotificationsBell } from './NotificationsBell';
+import { buildNotifications } from '@/lib/notifications';
 import { useDashboardData } from './useDashboardData';
 import { dateLabel, estimateTooltip, num, rate, relativeFromNow, signedPct, usd } from '@/lib/format';
 
@@ -162,12 +164,18 @@ export function Dashboard() {
   // arithmetic happened server-side (ov.budget); this only renders it.
   const budget = ov?.budget ?? null;
 
-  // Usage/cost anomaly callout (issue #45). A SUBTLE, self-hiding banner: it
-  // renders ONLY when the server flagged something on the latest period (the
-  // weather-normalized intensity or all-in $/unit deviating from its robust
-  // trailing baseline), and nothing at all otherwise — no always-on panel. All
-  // the detection happened server-side (ov.anomalies, pure detectAnomalies).
-  const anomalyFlags = ov?.anomalies?.flags ?? [];
+  // Header notifications bell (notifications-dropdown feature). The old inline
+  // amber anomaly banner (#45) is superseded by a dismissable dropdown that
+  // unifies the SAME events the email/webhook/ntfy channels send: usage/cost
+  // anomalies (ov.anomalies) AND the latest new-bill alert (#7, ov.latestBill).
+  // The list is derived by the pure buildNotifications helper (filtering keys the
+  // user has dismissed, persisted in prefs); dismiss appends the key. The badge
+  // counts only non-dismissed items.
+  const notifications = buildNotifications(ov, prefs.dismissedNotifications);
+  const dismissNotification = (key: string) => {
+    if (prefs.dismissedNotifications.includes(key)) return;
+    patch({ dismissedNotifications: [...prefs.dismissedNotifications, key] });
+  };
 
   // On-demand Tools modal (UX refactor): the interactive Compare-periods (#47) and
   // Supply what-if (#48) tools no longer sit always-visible below the strip — they
@@ -291,6 +299,13 @@ export function Dashboard() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Notifications bell (notifications-dropdown feature): the in-app mirror
+              of the email/webhook/ntfy alerts — anomalies (#45) + new-bill (#7) —
+              with an unread-count badge and a dismissable dropdown. Hidden until
+              there's data (and thus a possible bill/anomaly) to surface. */}
+          {!empty && (
+            <NotificationsBell notifications={notifications} onDismiss={dismissNotification} />
+          )}
           {/* Tools button (UX refactor): opens the interactive Compare / what-if
               tools in an on-demand modal instead of cluttering the dashboard body.
               Hidden until there's data to analyse. */}
@@ -601,33 +616,9 @@ export function Dashboard() {
             </div>
           ) : null}
 
-          {/* Usage/cost anomaly callout (issue #45). Subtle, self-hiding amber
-              banner shown ONLY when the latest period tripped an anomaly check
-              (weather-normalized usage or all-in rate well outside its robust
-              trailing baseline) — renders nothing when there's nothing to flag.
-              Each flag's wording comes from the server (detectAnomalies). */}
-          {anomalyFlags.length > 0 ? (
-            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
-              <div className="flex flex-wrap items-start gap-2">
-                <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.42 0z" />
-                </svg>
-                <div>
-                  <span className="font-medium">
-                    {anomalyFlags.length === 1 ? 'Anomaly detected on your latest bill' : `${anomalyFlags.length} anomalies on your latest bill`}
-                  </span>
-                  <ul className="mt-0.5 space-y-0.5 text-xs text-amber-200/85">
-                    {anomalyFlags.map((f) => (
-                      <li key={`${f.fuel}-${f.metric}`}>• {f.message}</li>
-                    ))}
-                  </ul>
-                  <div className="mt-0.5 text-[11px] text-amber-200/60">
-                    Compared to your robust trailing baseline (weather-normalized usage &amp; all-in $/unit). Not a real charge.
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
+          {/* The usage/cost anomaly callout (#45) that used to render here was
+              superseded by the header notifications bell — anomalies now appear as
+              dismissable items in that dropdown alongside the new-bill alert. */}
 
           {/* The interactive Compare-periods (#47) and Supply what-if (#48) tools
               no longer render inline here — they were powerful but rarely-used

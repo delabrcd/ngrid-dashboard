@@ -38,6 +38,11 @@ export interface Prefs {
   // only sensible value on a single-account install). Survives reload via
   // localStorage; an id that no longer exists is ignored at fetch time.
   selectedAccountId: number | null;
+  // Locally-dismissed in-app notifications (notifications-dropdown feature): the
+  // stable keys (see lib/notifications.ts) of header-bell items the user has
+  // dismissed. Persisted here so a dismissal sticks across reloads on this
+  // browser; a dismissed key never reappears. Empty by default.
+  dismissedNotifications: string[];
 }
 
 const baseChart = (over: Partial<ChartConfig> = {}): ChartConfig => ({
@@ -57,6 +62,7 @@ export const DEFAULT_PREFS: Prefs = {
   showProjectionOnCharts: true,
   showProjectionCard: true,
   selectedAccountId: null,
+  dismissedNotifications: [],
   order: CHART_SPECS.map((s) => s.id),
   charts: {
     usage: baseChart({ stacked: false }),
@@ -91,6 +97,10 @@ export function mergePrefs(
     showProjectionOnCharts: saved.showProjectionOnCharts ?? legacyProjection,
     showProjectionCard: saved.showProjectionCard ?? legacyProjection,
     selectedAccountId: saved.selectedAccountId ?? DEFAULT_PREFS.selectedAccountId,
+    // Defend against a malformed persisted value (only keep strings); default [].
+    dismissedNotifications: Array.isArray(saved.dismissedNotifications)
+      ? saved.dismissedNotifications.filter((k): k is string => typeof k === 'string')
+      : DEFAULT_PREFS.dismissedNotifications,
     order: mergeOrder(saved.order, DEFAULT_PREFS.order),
     charts,
   };
