@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildNotifications, type NotificationsOverview } from '../src/lib/notifications';
+import { buildNotifications, describeAnomaly, type NotificationsOverview } from '../src/lib/notifications';
 import type { AnomalyFlag, AnomalyResult } from '../src/lib/anomaly';
 
 // Minimal AnomalyFlag factory — only the fields the notification key + message use
@@ -93,5 +93,64 @@ describe('buildNotifications', () => {
     const items = buildNotifications({ latestBill: { statementDate: '2026-01-15', totalDueAmount: null } }, []);
     expect(items).toHaveLength(1);
     expect(items[0].message).toBe('New bill: — (Jan)');
+  });
+
+  // Each item carries the source data the click-to-open detail view needs: the
+  // bill item the latest-bill summary, each anomaly item its full flag.
+  it('attaches source data for the detail view', () => {
+    const items = buildNotifications(fullOverview, []);
+    const bill = items.find((n) => n.kind === 'bill')!;
+    expect(bill.bill).toEqual({ statementDate: '2026-06-03', totalDueAmount: 192.24 });
+    expect(bill.flag).toBeUndefined();
+    const anomaly = items.find((n) => n.key === 'anomaly:202406:elec:usage')!;
+    expect(anomaly.flag?.fuel).toBe('elec');
+    expect(anomaly.flag?.metric).toBe('usage');
+    expect(anomaly.bill).toBeUndefined();
+  });
+});
+
+describe('describeAnomaly', () => {
+  // Electric RATE anomaly, above, with a finite deviation multiple. Rate values
+  // format as $/kWh (3 dp); pct rounds 0.1219 -> +12%; deviations -> "5.2×…".
+  it('formats an electric rate anomaly with rate units and a deviation multiple', () => {
+    const d = describeAnomaly(mkFlag({
+      fuel: 'elec', metric: 'rate', direction: 'above', ym: 202605,
+      latest: 0.2412, median: 0.215, pct: 0.1219, deviations: 5.2,
+      message: 'electric rate ~12% above recent rate band',
+    }));
+    expect(d.title).toBe('Electric rate anomaly — May 2026');
+    expect(d.headline).toBe('electric rate ~12% above recent rate band');
+    expect(d.metricLabel).toBe('all-in rate ($/kWh)');
+    expect(d.latest).toBe('$0.241');
+    expect(d.median).toBe('$0.215');
+    expect(d.pct).toBe('+12%');
+    expect(d.deviations).toBe('5.2× the normal month-to-month variation');
+    expect(d.meaning).toContain('supply-rate or ESCO');
+  });
+
+  // Gas USAGE anomaly, below, with a non-finite (flat-history) deviation. Usage
+  // values format as a plain 3-dp intensity; pct rounds -0.2267 -> −23% (true minus);
+  // Infinity deviations -> the flat-history phrasing.
+  it('formats a gas usage anomaly with intensity units and a flat-history fallback', () => {
+    const d = describeAnomaly(mkFlag({
+      fuel: 'gas', metric: 'usage', direction: 'below', ym: 202601,
+      latest: 0.812, median: 1.05, pct: -0.2267, deviations: Number.POSITIVE_INFINITY,
+      message: 'gas usage ~23% below weather-normalized expectation',
+    }));
+    expect(d.title).toBe('Gas usage anomaly — January 2026');
+    expect(d.metricLabel).toBe('weather-normalized usage intensity');
+    expect(d.latest).toBe('0.812');
+    expect(d.median).toBe('1.050');
+    expect(d.pct).toBe('−23%');
+    expect(d.deviations).toBe('a jump from a previously flat history');
+    expect(d.meaning).toContain('weather');
+  });
+
+  // The gas-rate unit is $/therm, and an "above" usage anomaly gets the
+  // efficiency-regression / new-load meaning line.
+  it('uses $/therm for gas rate and the new-load meaning for usage above', () => {
+    expect(describeAnomaly(mkFlag({ fuel: 'gas', metric: 'rate' })).metricLabel).toBe('all-in rate ($/therm)');
+    const usageAbove = describeAnomaly(mkFlag({ fuel: 'elec', metric: 'usage', direction: 'above' }));
+    expect(usageAbove.meaning).toContain('always-on load');
   });
 });

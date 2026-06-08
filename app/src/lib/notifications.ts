@@ -15,7 +15,8 @@
 // A dismissed key never reappears; the unread badge counts only what survives the
 // filter here.
 
-import type { AnomalyResult } from './anomaly';
+import type { AnomalyResult, AnomalyFlag } from './anomaly';
+import { rate, num } from './format';
 
 // The slice of Overview this module reads. Kept narrow (and structurally
 // compatible with useDashboardData's Overview) so the helper stays decoupled from
@@ -27,6 +28,15 @@ export interface NotificationsOverview {
 
 export type NotificationKind = 'anomaly' | 'bill';
 export type NotificationTone = 'warning' | 'info';
+
+// The latest-bill source carried on a 'bill' notification so the detail modal can
+// render the summary without re-deriving it. Structurally a subset of Overview's
+// latestBill (statement + the period's Amount Due) — kept here so the click-detail
+// view has everything it needs straight off the notification.
+export interface NotificationBill {
+  statementDate: string;
+  totalDueAmount: number | null;
+}
 
 export interface Notification {
   // The stable dedupe/dismiss key (see the module header for the formats).
@@ -41,6 +51,12 @@ export interface Notification {
   // (YYYYMM); for the bill it's the statement's YYYYMMDD. They're not the same
   // scale, but the bill is always rendered first below regardless (see sort).
   sortAt: number;
+  // Source data for the click-to-open detail view (notification-details feature).
+  // Exactly one is set per item, matching `kind`: the full AnomalyFlag for an
+  // anomaly (so describeAnomaly can build the breakdown) and the latest-bill summary
+  // for a new-bill item (the bell joins it to the bills table for period + PDF).
+  flag?: AnomalyFlag;
+  bill?: NotificationBill;
 }
 
 // Short month label (e.g. "Jun") from a YYYY-MM-DD statement date, without
@@ -83,6 +99,7 @@ export function buildNotifications(
         tone: 'info',
         message: `New bill: ${dollars(bill.totalDueAmount)}${mon ? ` (${mon})` : ''}`,
         sortAt: Number(bill.statementDate.replace(/-/g, '')) || 0,
+        bill: { statementDate: bill.statementDate, totalDueAmount: bill.totalDueAmount },
       });
     }
   }
@@ -97,6 +114,7 @@ export function buildNotifications(
       tone: 'warning',
       message: f.message,
       sortAt: f.ym,
+      flag: f,
     });
   }
 
@@ -107,4 +125,100 @@ export function buildNotifications(
     if (a.kind !== b.kind) return a.kind === 'bill' ? -1 : 1;
     return b.sortAt - a.sortAt;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Anomaly detail (notification-details feature). Clicking an anomaly notification
+// opens a breakdown; this pure helper turns the raw AnomalyFlag into the structured
+// fields that view renders, so NO formatting/arithmetic lives in the component. It
+// re-states the flag's numbers in their right units and adds a plain-language,
+// non-alarmist "what this can mean" line tailored to the (metric, direction). PURE
+// — hand-tested in notifications.test.ts.
+// ---------------------------------------------------------------------------
+
+export interface AnomalyDetail {
+  // "Electric rate anomaly — May 2026" (fuel + metric + the flagged period).
+  title: string;
+  // The flag's server-built headline (shared wording with the email channel).
+  headline: string;
+  // What `latest`/`median` mean in words, e.g. "weather-normalized usage intensity"
+  // or "all-in rate" — labels the stats list so the units read correctly.
+  metricLabel: string;
+  // This period's value and the recent typical, already unit-formatted ($/kWh,
+  // $/therm for rate; a plain intensity number for usage).
+  latest: string;
+  median: string;
+  // Signed % difference from the recent typical ("+28%", "−12%").
+  pct: string;
+  // How far outside normal, e.g. "5.2× the normal month-to-month variation", or a
+  // flat-history phrasing when the flag's deviations is non-finite.
+  deviations: string;
+  // Factual, tailored sentence about a plausible cause/meaning.
+  meaning: string;
+}
+
+const DETAIL_FUEL_LABEL: Record<AnomalyFlag['fuel'], string> = { elec: 'Electric', gas: 'Gas' };
+
+// Long month name from a YYYYMM integer (e.g. 202605 -> "May 2026"). Local to this
+// module (the dropdown's monthShort is YYYY-MM-DD shaped and abbreviated).
+function ymTitle(ym: number): string {
+  const NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const y = Math.floor(ym / 100);
+  const m = ym % 100;
+  return m >= 1 && m <= 12 ? `${NAMES[m - 1]} ${y}` : String(ym);
+}
+
+// Signed whole-percent from a fraction, true-minus to match format.ts' signedPct
+// (kept inline so notifications stays a single import of value formatters).
+function signedPct(frac: number): string {
+  const p = Math.round(frac * 100);
+  return p > 0 ? `+${p}%` : p < 0 ? `−${Math.abs(p)}%` : '0%';
+}
+
+// Plain-language, factual cause line per (metric, direction). Usage is the
+// weather-normalized intensity (so an "above" can't be blamed on weather); rate is
+// the all-in $/unit (so an "above" points at supply/ESCO pricing).
+function meaningLine(flag: AnomalyFlag): string {
+  const fuel = flag.fuel === 'elec' ? 'electricity' : 'gas';
+  if (flag.metric === 'usage') {
+    return flag.direction === 'above'
+      ? `Usage is high even after adjusting for the weather, so it isn't just a hot/cold month — a new always-on load or an efficiency regression (e.g. failing equipment) could explain it.`
+      : `Usage is low even after adjusting for the weather — often an efficiency gain, a removed load, or a shorter/estimated read.`;
+  }
+  return flag.direction === 'above'
+    ? `The all-in ${fuel} rate rose more than its recent range — commonly a supply-rate or ESCO price increase, or a change in fixed delivery charges.`
+    : `The all-in ${fuel} rate fell below its recent range — commonly a supply-rate decrease or a billing-period mix shift.`;
+}
+
+// Build the structured detail for an anomaly flag (see AnomalyDetail). Formats
+// rate values as $/kWh or $/therm and usage intensities as a 3-dp number labelled
+// "weather-normalized usage intensity"; reports `deviations` as a "× the normal
+// month-to-month variation" multiple (with a flat-history fallback when the flag's
+// MAD was zero and deviations is Infinity). PURE.
+export function describeAnomaly(flag: AnomalyFlag): AnomalyDetail {
+  const isRate = flag.metric === 'rate';
+  const fuelLabel = DETAIL_FUEL_LABEL[flag.fuel];
+  const metricWord = isRate ? 'rate' : 'usage';
+
+  // Units: rate is $/kWh (elec) or $/therm (gas); usage is the weather-normalized
+  // intensity (kWh/degree-day, therms/HDD) — a small unitless-ish number, shown to
+  // 3 dp and labelled rather than carrying a noisy compound unit in the value.
+  const fmtVal = (v: number) => (isRate ? rate(v) : num(v, 3));
+  const rateUnit = flag.fuel === 'elec' ? '$/kWh' : '$/therm';
+  const metricLabel = isRate ? `all-in rate (${rateUnit})` : 'weather-normalized usage intensity';
+
+  const deviations = Number.isFinite(flag.deviations)
+    ? `${num(flag.deviations, 1)}× the normal month-to-month variation`
+    : 'a jump from a previously flat history';
+
+  return {
+    title: `${fuelLabel} ${metricWord} anomaly — ${ymTitle(flag.ym)}`,
+    headline: flag.message,
+    metricLabel,
+    latest: fmtVal(flag.latest),
+    median: fmtVal(flag.median),
+    pct: signedPct(flag.pct),
+    deviations,
+    meaning: meaningLine(flag),
+  };
 }

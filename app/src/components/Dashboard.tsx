@@ -304,7 +304,12 @@ export function Dashboard() {
               with an unread-count badge and a dismissable dropdown. Hidden until
               there's data (and thus a possible bill/anomaly) to surface. */}
           {!empty && (
-            <NotificationsBell notifications={notifications} onDismiss={dismissNotification} />
+            <NotificationsBell
+              notifications={notifications}
+              onDismiss={dismissNotification}
+              bills={bills}
+              onOpenCompare={() => openTools('compare')}
+            />
           )}
           {/* Tools button (UX refactor): opens the interactive Compare / what-if
               tools in an on-demand modal instead of cluttering the dashboard body.
