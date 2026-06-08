@@ -175,18 +175,24 @@ export function Dashboard() {
     setToolsOpen(true);
   };
 
-  // The host context the widget registry renders against (Phase A, issue #93).
-  // Charts and stats keep their existing, separate data sources in Phase A (the
-  // dataset abstraction is Phase B), so we hand the host exactly what the old
-  // inline JSX consumed: the specFor/chartRows adapters (which carry the #71
-  // spec-stripping and #52/#71 forward-projection append UNCHANGED), the chart
-  // layout knobs, and the StatData bag + openTools. `chartFill` is set per chart
-  // code-path below (the paginated fit grid always fills; the stacking grid fills
-  // only in fit density) — exactly as the two old ConfigurableChart call sites
-  // passed it — so we build the host with a caller-supplied fill.
+  // The host context the widget registry renders against (Phase A #93 / Phase B
+  // #94). Chart widgets now declare a `dataset` and resolve it through the host;
+  // for `'monthly'` the resolver delegates to the SAME chartRows() adapter (the
+  // #71 spec-stripping + #52/#71 forward-projection append are UNCHANGED — that
+  // logic still lives here, in one place). The spec to draw still comes from
+  // specFor (it carries the proj*-series stripping). `'monthly'` is the only id a
+  // Phase-B chart asks for; resolving any other is a wiring bug, so we throw.
+  // `chartFill` is set per chart code-path below (the paginated fit grid always
+  // fills; the stacking grid fills only in fit density) — exactly as the two old
+  // ConfigurableChart call sites passed it — so we build the host with a
+  // caller-supplied fill.
+  const resolveDataset: WidgetHost['resolveDataset'] = (dataset, id) => {
+    if (dataset === 'monthly') return chartRows(id) as never;
+    throw new Error(`Dataset '${dataset}' is not resolvable in Phase B`);
+  };
   const widgetHost = (chartFill: boolean): WidgetHost => ({
+    resolveDataset,
     specFor,
-    chartRows,
     chartFill,
     chartHeight: 288,
     statData,

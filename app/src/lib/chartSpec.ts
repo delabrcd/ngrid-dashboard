@@ -1,6 +1,17 @@
 // Declarative spec for each dashboard chart. The generic renderer in
 // ConfigurableChart.tsx turns these into Recharts charts and the config menu is
 // derived from them, so adding/altering a chart is a data change here.
+//
+// Phase B (issue #94; RFC §3.2) generalizes this from "a series over `MonthRow`"
+// to "a VISUALIZATION over a named dataset". The change is deliberately ADDITIVE
+// — the spec objects now carry a `vizType` + a `dataset`, but the timeseries
+// shape (the `series: SeriesDef[]` + axis formatters + row filter) is UNCHANGED,
+// so `ChartSpec` stays the name 30+ call sites import and the 7 charts render
+// byte-identically. Only `'timeseries'` is implemented in Phase B; the other
+// vizTypes are declared in the union so the type seam exists for Phase C
+// (scatter/heatmap/profile renderers), but have no renderer yet.
+
+import type { DatasetId } from '@/lib/datasets';
 
 export interface MonthRow {
   ym: number;
@@ -65,15 +76,67 @@ export interface SeriesDef {
   dash?: boolean;
 }
 
-export interface ChartSpec {
+// Fields every viz shares regardless of vizType: a stable id (registry key),
+// a title/subtitle, and the `dataset` it visualizes (RFC §3.2 — the data is
+// declared by name; the host resolves it). `Row` is the resolved row type of
+// that dataset, so the per-vizType `encoding` is typed against the real fields.
+interface VizBase<Row> {
   id: string;
   title: string;
   subtitle?: string;
+  dataset: DatasetId;
+  // Marker for `Row` so the generic is used at the type level even though the
+  // shared fields don't otherwise reference it; the per-vizType encodings below
+  // are what actually consume `Row`. (Never read at runtime.)
+  __row?: Row;
+}
+
+// The TIMESERIES viz — the only one implemented in Phase B. Its "encoding" is
+// today's chart shape verbatim: a list of `SeriesDef` (keyed on `MonthRow`
+// fields), the two optional axis formatters, and the row `filter`. So the
+// existing `CHART_SPECS` map onto it 1:1 by just adding `vizType`/`dataset`.
+export interface TimeseriesVizSpec extends VizBase<MonthRow> {
+  vizType: 'timeseries';
   series: SeriesDef[];
   leftFmt?: (v: number) => string;
   rightFmt?: (v: number) => string;
   filter: (r: MonthRow) => boolean;
 }
+
+// The DECLARED-BUT-UNIMPLEMENTED vizTypes (RFC §3.2). They exist so the type
+// seam and the `vizType → renderer` registry (lib/widgets/vizRenderers) are real
+// now; their renderers + encoding shapes land in Phase C (issue #95) when the
+// AMI interval cluster needs them. Each carries a placeholder `encoding` so the
+// union is structurally distinct and future-typed without committing to the
+// exact shape yet. NOT rendered in Phase B.
+export interface ScatterVizSpec extends VizBase<unknown> {
+  vizType: 'scatter';
+  encoding?: unknown;
+}
+export interface HeatmapVizSpec extends VizBase<unknown> {
+  vizType: 'heatmap';
+  encoding?: unknown;
+}
+export interface ProfileVizSpec extends VizBase<unknown> {
+  vizType: 'profile';
+  encoding?: unknown;
+}
+
+// A visualization over a typed dataset (RFC §3.2). The discriminant is
+// `vizType`; only `'timeseries'` is fully specified in Phase B.
+export type VizSpec =
+  | TimeseriesVizSpec
+  | ScatterVizSpec
+  | HeatmapVizSpec
+  | ProfileVizSpec;
+
+// `ChartSpec` is kept as the TIMESERIES-specialized alias so the 30+ existing
+// import sites (ConfigurableChart, prefs.tsx, ToolsModal, Dashboard, the
+// registry, SettingsView, …) don't churn — and so `ConfigurableChart` keeps
+// receiving exactly the shape it always did (`series`/`filter`/`leftFmt`/
+// `rightFmt`). It is now just `TimeseriesVizSpec`, which additionally carries
+// `vizType:'timeseries'` + `dataset`. Render output is unchanged.
+export type ChartSpec = TimeseriesVizSpec;
 
 const ELEC = '#f59e0b';
 const ELEC_SOFT = '#fcd34d';
@@ -95,9 +158,15 @@ const dd = (v: number) => `${Math.round(v)}`;
 const num3 = (v: number) => `${(+v).toFixed(3)}`;
 const kg = (v: number) => `${Math.round(v)} kg`;
 
+// Every chart is a `timeseries` viz over the `monthly` dataset (the `MonthRow[]`
+// the dashboard already builds). `vizType`/`dataset` are the only additions vs
+// Phase A — the series/filter/formatters are untouched, so each spec renders
+// byte-identically through the timeseries renderer.
 export const CHART_SPECS: ChartSpec[] = [
   {
     id: 'usage',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Energy usage',
     subtitle: 'Electricity (kWh) and gas (therms) per month',
     series: [
@@ -111,6 +180,8 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'cost',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Cost breakdown',
     subtitle: 'Supply vs delivery per fuel, with total bill',
     series: [
@@ -127,6 +198,8 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'rates',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Effective rates',
     subtitle: 'What you pay per unit: supply (solid), recent average (faint dashed) and all-in price (dashed)',
     series: [
@@ -145,6 +218,8 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'weather',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Usage vs weather',
     subtitle: 'Monthly avg temperature against energy use',
     series: [
@@ -157,6 +232,8 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'degreeDays',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Heating & cooling weather',
     subtitle: 'How much heating and cooling weather each bill period had',
     series: [
@@ -168,6 +245,8 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'normalized',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Weather-adjusted usage',
     subtitle: 'Your energy use after accounting for how hot or cold it was — a flat line means weather explains the changes',
     series: [
@@ -180,6 +259,8 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'emissions',
+    vizType: 'timeseries',
+    dataset: 'monthly',
     title: 'Carbon footprint (estimate)',
     subtitle: 'Estimated CO₂e per fuel each month, based on your usage and a regional grid average — not your specific plan',
     series: [

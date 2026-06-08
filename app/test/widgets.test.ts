@@ -53,6 +53,9 @@ describe('widget registry completeness', () => {
       expect(w, `chart:${s.id} missing`).toBeTruthy();
       expect(w.category).toBe('chart');
       expect(getWidget(chartWidgetType(s.id))).toBe(w);
+      // Phase B (#94): a chart-widget declares exactly its spec's dataset as its
+      // single dataDep, so the host knows what to resolve for it.
+      expect(w.dataDeps, `chart:${s.id} dataDeps`).toEqual([s.dataset]);
     }
   });
 
@@ -62,6 +65,9 @@ describe('widget registry completeness', () => {
       expect(w, `stat:${id} missing`).toBeTruthy();
       expect(w.category).toBe('stat');
       expect(getWidget(statWidgetType(id))).toBe(w);
+      // Stat widgets read the `ov` bag off the host directly in Phase A/B, so
+      // they declare no dataset deps yet.
+      expect(w.dataDeps, `stat:${id} dataDeps`).toEqual([]);
     }
   });
 
