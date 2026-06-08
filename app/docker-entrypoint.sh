@@ -25,6 +25,8 @@ backup_before_migrate() {
   # it. The password comes straight from $DB_PASSWORD (any character, no parsing);
   # host/port come from the URL authority — the slice after the LAST '@' and before
   # the first '/', neither of which can contain the password's special characters.
+  # Known limitation: an IPv6 host literal (e.g. [::1]:5432) would mis-parse in the
+  # host:port split below — not supported here (use DB_USER/DB_NAME + a hostname).
   local authority="${DATABASE_URL##*@}"   # host:port/db?params  (password stripped)
   authority="${authority%%/*}"            # host:port
   local pghost="${authority%%:*}"
@@ -34,10 +36,30 @@ backup_before_migrate() {
   local pgdb="${DB_NAME:-ngrid}"
   local -a pg_conn=(-h "$pghost" -p "$pgport" -U "$pguser" -d "$pgdb")
 
-  # Fresh database (no app tables yet) → nothing to back up. `|| true` keeps a probe
-  # that can't connect from tripping `set -e`; an empty result is treated as fresh.
-  local has_account
-  has_account="$(PGPASSWORD="$DB_PASSWORD" psql "${pg_conn[@]}" -Atqc "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='Account' LIMIT 1" 2>/dev/null || true)"
+  # Probe for an app table to tell a fresh DB from a populated one. Distinguish the
+  # probe's EXIT CODE from its output so a connect/auth/db-missing failure is NOT
+  # mistaken for "fresh" (that would silently skip the only pre-migrate safety net):
+  #   rc != 0           → AMBIGUOUS (could not connect) → fail closed.
+  #   rc == 0, empty    → connected, table absent → genuinely fresh, skip backup.
+  #   rc == 0, "1"      → table exists → fall through to the schema-diff/backup logic.
+  # The discriminator is $rc, not stderr. `set -e` would abort on the failing probe
+  # (a plain assignment whose command substitution fails does trip errexit), so turn
+  # it off just around the probe and capture the real exit code into $rc.
+  local has_account rc
+  set +e
+  has_account="$(PGPASSWORD="$DB_PASSWORD" psql "${pg_conn[@]}" -Atqc "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='Account' LIMIT 1" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    echo "[entrypoint] ERROR: could not probe the database to decide on a pre-migrate backup."
+    echo "[entrypoint] psql exited $rc connecting as user='$pguser' db='$pgdb' to $pghost:$pgport:"
+    echo "[entrypoint]   $has_account"
+    echo "[entrypoint] If DATABASE_URL points at an EXTERNAL Postgres, also set DB_USER/DB_NAME/DB_PASSWORD"
+    echo "[entrypoint] to match it — the backup probe connects with those, not by parsing the URL."
+    echo "[entrypoint] Otherwise the connection is misconfigured. Refusing to apply schema changes"
+    echo "[entrypoint] without a verified backup. Set BACKUP_BEFORE_MIGRATE=false to override (NOT recommended)."
+    exit 1
+  fi
   if [ "$has_account" != "1" ]; then
     echo "[entrypoint] fresh database — no pre-migrate backup needed"
     return 0
