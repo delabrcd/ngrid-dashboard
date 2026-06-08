@@ -128,16 +128,16 @@ export const CHART_SPECS: ChartSpec[] = [
   {
     id: 'rates',
     title: 'Effective rates',
-    subtitle: 'Supply rate (solid), trailing avg (dashed soft) and all-in rate (dashed)',
+    subtitle: 'What you pay per unit: supply (solid), recent average (faint dashed) and all-in price (dashed)',
     series: [
-      { key: 'elecRateSupply', label: 'Elec $/kWh', color: ELEC, role: 'line', axis: 'left' },
+      { key: 'elecRateSupply', label: 'Elec supply $/kWh', color: ELEC, role: 'line', axis: 'left' },
       // Trailing-average supply rate (issue #48) — soft dashed, so a creeping
       // variable supply rate is visible against the noisier per-month line.
-      { key: 'elecRateSupplyAvg', label: 'Elec $/kWh supply avg', color: ELEC_SOFT, role: 'line', axis: 'left', dash: true },
-      { key: 'elecRateAllIn', label: 'Elec $/kWh all-in', color: ELEC, role: 'line', axis: 'left', dash: true },
-      { key: 'gasRateSupply', label: 'Gas $/therm', color: GAS, role: 'line', axis: 'right' },
-      { key: 'gasRateSupplyAvg', label: 'Gas $/therm supply avg', color: GAS_SOFT, role: 'line', axis: 'right', dash: true },
-      { key: 'gasRateAllIn', label: 'Gas $/therm all-in', color: GAS, role: 'line', axis: 'right', dash: true },
+      { key: 'elecRateSupplyAvg', label: 'Elec supply $/kWh (recent avg)', color: ELEC_SOFT, role: 'line', axis: 'left', dash: true },
+      { key: 'elecRateAllIn', label: 'Elec $/kWh (full price)', color: ELEC, role: 'line', axis: 'left', dash: true },
+      { key: 'gasRateSupply', label: 'Gas supply $/therm', color: GAS, role: 'line', axis: 'right' },
+      { key: 'gasRateSupplyAvg', label: 'Gas supply $/therm (recent avg)', color: GAS_SOFT, role: 'line', axis: 'right', dash: true },
+      { key: 'gasRateAllIn', label: 'Gas $/therm (full price)', color: GAS, role: 'line', axis: 'right', dash: true },
     ],
     leftFmt: money2,
     rightFmt: money2,
@@ -157,22 +157,22 @@ export const CHART_SPECS: ChartSpec[] = [
   },
   {
     id: 'degreeDays',
-    title: 'Degree-days',
-    subtitle: 'Heating (HDD) and cooling (CDD) degree-days per bill period',
+    title: 'Heating & cooling weather',
+    subtitle: 'How much heating and cooling weather each bill period had',
     series: [
-      { key: 'hdd', label: 'HDD', color: HDD, role: 'bar', axis: 'left' },
-      { key: 'cdd', label: 'CDD', color: CDD, role: 'bar', axis: 'left' },
+      { key: 'hdd', label: 'Heating', color: HDD, role: 'bar', axis: 'left' },
+      { key: 'cdd', label: 'Cooling', color: CDD, role: 'bar', axis: 'left' },
     ],
     leftFmt: dd,
     filter: (r) => r.hdd != null || r.cdd != null,
   },
   {
     id: 'normalized',
-    title: 'Weather-normalized usage',
-    subtitle: 'kWh per degree-day (HDD+CDD) and therms per HDD — flat = weather-driven',
+    title: 'Weather-adjusted usage',
+    subtitle: 'Your energy use after accounting for how hot or cold it was — a flat line means weather explains the changes',
     series: [
-      { key: 'kwhPerDegreeDay', label: 'kWh / degree-day', color: ELEC, role: 'line', axis: 'left' },
-      { key: 'thermsPerHdd', label: 'therms / HDD', color: GAS, role: 'line', axis: 'right' },
+      { key: 'kwhPerDegreeDay', label: 'Electricity (weather-adjusted)', color: ELEC, role: 'line', axis: 'left' },
+      { key: 'thermsPerHdd', label: 'Gas (weather-adjusted)', color: GAS, role: 'line', axis: 'right' },
     ],
     leftFmt: num3,
     rightFmt: num3,
@@ -181,7 +181,7 @@ export const CHART_SPECS: ChartSpec[] = [
   {
     id: 'emissions',
     title: 'Carbon footprint (estimate)',
-    subtitle: 'Location-based CO₂e per fuel per month — usage × published EPA factors, not your actual plan',
+    subtitle: 'Estimated CO₂e per fuel each month, based on your usage and a regional grid average — not your specific plan',
     series: [
       { key: 'co2eElec', label: 'Electricity', color: CO2_ELEC, role: 'bar', axis: 'left' },
       { key: 'co2eGas', label: 'Gas', color: CO2_GAS, role: 'bar', axis: 'left' },

@@ -94,7 +94,7 @@ describe('projectSeason — fit-path projection + horizon-widening band (hand-ca
     expect(proj.annual.point).toBeCloseTo(522, 6);
     expect(proj.annual.high - proj.annual.point).toBeCloseTo(1.766352, 5);
     expect(proj.annual.low).toBeCloseTo(520.233648, 5);
-    expect(proj.basis).toContain('climatological projection');
+    expect(proj.basis).toContain("a typical year's weather");
   });
 });
 
@@ -125,7 +125,7 @@ describe('projectSeason — same-month-last-year fallback (hand-calculated)', ()
   });
 
   it('marks the whole season climatological-fallback in the basis', () => {
-    expect(proj.basis).toContain('climatological fallback');
+    expect(proj.basis).toContain('the same months last year');
   });
 
   it('drops a fuel/month with no same-month-last-year (projCost 0)', () => {
@@ -207,7 +207,7 @@ describe('projectSeason — per-component Kalman pricing (issue #72, hand-calcul
       projYms.map((ym) => [ym, { hdd: 0, cdd: 25, forecastDays: 0, normalDays: 30 }])
     );
     const proj = projectSeason(built, normals, { elec: null, gas: null });
-    expect(proj.basis).toContain('per-component Kalman fixed+variable rates');
+    expect(proj.basis).toContain('your recent rates');
 
     const m = proj.months[0];
     // therms projects to 0 -> gas cost is purely the fixed charge:
@@ -259,8 +259,8 @@ describe('projectSeason — flat-rate fallback when history is too short', () =>
     // 202405..202504. Only 202404's prior-year (none) exists, so months drop to 0,
     // but the basis must still say flat all-in rates (NOT per-component Kalman).
     const proj = projectSeason(rows, new Map(), { elec: 0.1, gas: 1.0 });
-    expect(proj.basis).toContain('current 12-mo all-in rates');
-    expect(proj.basis).not.toContain('per-component Kalman');
+    expect(proj.basis).toContain('your typical rate');
+    expect(proj.basis).not.toContain('your recent rates');
     // 202404 -> 202304 missing -> first month drops both fuels to 0 (flat path).
     expect(proj.months[0].projCost).toBe(0);
   });

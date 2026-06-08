@@ -77,7 +77,7 @@ describe('detectAnomalies — documented robust thresholding', () => {
     expect(f.latest).toBe(1.3);
     expect(f.pct).toBeCloseTo(0.3, 10);
     expect(f.deviations).toBeCloseTo(0.3 / (MAD_SCALE * 0.02), 6);
-    expect(f.message).toBe('electric usage ~30% above weather-normalized expectation');
+    expect(f.message).toBe('electric usage ~30% higher than usual for this weather');
   });
 
   // A genuinely LOWER intensity (efficiency improvement / behaviour change) flags
@@ -90,7 +90,7 @@ describe('detectAnomalies — documented robust thresholding', () => {
     expect(flags).toHaveLength(1);
     expect(flags[0].direction).toBe('below');
     expect(flags[0].pct).toBeCloseTo(-0.3, 10);
-    expect(flags[0].message).toBe('electric usage ~30% below weather-normalized expectation');
+    expect(flags[0].message).toBe('electric usage ~30% lower than usual for this weather');
   });
 
   // A modest bump that's BIGGER than the median but still inside the robust band
@@ -123,7 +123,7 @@ describe('detectAnomalies — rate jump (ESCO / supply-rate change)', () => {
     expect(flags[0].direction).toBe('above');
     expect(flags[0].pct).toBeCloseTo(0.3, 10);
     expect(flags[0].deviations).toBe(Number.POSITIVE_INFINITY);
-    expect(flags[0].message).toBe('electric rate ~30% above recent rate band');
+    expect(flags[0].message).toBe('electric rate ~30% higher than usual');
   });
 
   it('does NOT flag a small rate wobble within the flat-MAD fallback band', () => {

@@ -167,9 +167,12 @@ function evalSeries(
   const direction: AnomalyDirection = diff > 0 ? 'above' : 'below';
   const pct = diff / med;
   const pctTxt = `${Math.round(Math.abs(pct) * 100)}%`;
-  const expectation =
-    metric === 'usage' ? 'weather-normalized expectation' : 'recent rate band';
-  const message = `${FUEL_LABEL[fuel]} ${METRIC_LABEL[metric]} ~${pctTxt} ${direction} ${expectation}`;
+  // User-facing wording: usage is compared after adjusting for the weather, so an
+  // "above" can't be blamed on a hot/cold month; rate is the all-in price.
+  const directionWord = direction === 'above' ? 'higher' : 'lower';
+  const comparison =
+    metric === 'usage' ? 'than usual for this weather' : 'than usual';
+  const message = `${FUEL_LABEL[fuel]} ${METRIC_LABEL[metric]} ~${pctTxt} ${directionWord} ${comparison}`;
 
   return {
     fuel,

@@ -231,7 +231,7 @@ export function SettingsView() {
         <div className="space-y-3">
           <div>
             <div className="text-sm font-medium text-slate-200">12-month projection</div>
-            <div className="text-xs text-slate-500">Show the seasonal next-12-months projection as a dashed forward series on the cost &amp; usage charts. The projection&rsquo;s annual total now lives in the Budget tool (Tools &rarr; Budget), so there&rsquo;s no longer a separate summary card.</div>
+            <div className="text-xs text-slate-500">Show an estimate of the next 12 months as a dashed line on the cost &amp; usage charts. The estimated yearly total now lives in the Budget tool (Tools &rarr; Budget), so there&rsquo;s no longer a separate summary card.</div>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 pl-3">
             <div className="text-xs text-slate-400">On charts <span className="text-slate-600">— dashed projected series on cost &amp; usage</span></div>
@@ -253,9 +253,9 @@ export function SettingsView() {
           <div>
             <div className="text-sm font-medium text-slate-200">Carbon estimate — grid factor</div>
             <div className="text-xs text-slate-500">
-              kg CO₂e per kWh for the electricity carbon estimate. Leave blank to use the region&apos;s
-              EPA eGRID default; set your own if you&apos;re on a green/renewable supply plan. Gas is fixed at the
-              EPA 5.3 kg CO₂e/therm combustion factor.
+              Carbon per unit of electricity, used for the carbon estimate. Leave blank to use your region&apos;s
+              grid average; set your own if you&apos;re on a green or renewable plan. Gas uses a standard
+              published factor.
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 pl-3">
@@ -292,9 +292,9 @@ export function SettingsView() {
           <div>
             <div className="text-sm font-medium text-slate-200">Annual spending target</div>
             <div className="text-xs text-slate-500">
-              Dollars per calendar year. The dashboard shows a budget card with how much you&apos;ve spent so far
-              (from your bills&apos; actual period charges) and a projected end-of-year total, with on-track / over /
-              under status. Leave blank to hide the card.
+              How much you want to spend on energy this calendar year. The dashboard shows a budget card with
+              how much you&apos;ve spent so far and an estimated end-of-year total, plus whether you&apos;re on track.
+              Leave blank to hide the card.
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 pl-3">
@@ -412,8 +412,8 @@ export function SettingsView() {
             <div>
               <div className="text-sm font-medium text-slate-200">Alert on bill anomalies</div>
               <div className="text-xs text-slate-500">
-                Sends one alert on the channel above when a new bill&apos;s weather-normalized usage or all-in rate breaks
-                from its recent baseline. {savingAnomaly ? 'Saving…' : 'Off by default.'}
+                Sends one alert on the channel above when a new bill&apos;s usage (after accounting for the weather) or
+                price is well outside your recent normal. {savingAnomaly ? 'Saving…' : 'Off by default.'}
                 {server?.notify && !server.notify.configured ? ' Configure a channel (above) for this to send.' : ''}
               </div>
             </div>
@@ -483,8 +483,8 @@ export function SettingsView() {
         <div className="border-t border-slate-800 pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-slate-200">Data integrity</div>
-              <div className="text-xs text-slate-500">Re-parse every bill PDF and cross-check the stored numbers against it.</div>
+              <div className="text-sm font-medium text-slate-200">Data check</div>
+              <div className="text-xs text-slate-500">Double-check that the numbers shown here match your actual bills.</div>
             </div>
             <button className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" onClick={runVerify} disabled={verifying}>
               {verifying ? 'Verifying…' : 'Verify all bills'}
@@ -493,7 +493,7 @@ export function SettingsView() {
           {verify && (
             <div className="mt-3 text-sm">
               {verify.ok ? (
-                <p className="text-emerald-400">✓ All {verify.total} bills match their PDFs exactly.</p>
+                <p className="text-emerald-400">✓ All {verify.total} bills match your actual statements exactly.</p>
               ) : (
                 <div className="text-rose-400">
                   <p>✗ {verify.failed} of {verify.total} bills have mismatches:</p>

@@ -67,13 +67,13 @@ export function yoyVerdict(res: YoyFuelResult, fuelLabel: string, unit: string):
   // phrased as the human takeaway (used less / more / about the same).
   let verdict: string;
   if (res.normalizedPct == null) {
-    verdict = 'normalized change unavailable';
+    verdict = 'weather-adjusted change unavailable';
   } else {
     const p = Math.round(res.normalizedPct * 100);
     verdict =
-      p < 0 ? `~${Math.abs(p)}% lower after normalizing`
-        : p > 0 ? `~${p}% higher after normalizing`
-          : 'about flat after normalizing';
+      p < 0 ? `~${Math.abs(p)}% lower once you account for the weather`
+        : p > 0 ? `~${p}% higher once you account for the weather`
+          : 'about the same once you account for the weather';
   }
-  return `${fuelLabel}: ${raw} ${unit}, but ${dd} degree-days — ${verdict}.`;
+  return `${fuelLabel}: ${raw} ${unit}, but ${dd} heating/cooling weather — ${verdict}.`;
 }

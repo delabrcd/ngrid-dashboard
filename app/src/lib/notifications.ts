@@ -264,12 +264,12 @@ function meaningLine(flag: AnomalyFlag): string {
   const fuel = flag.fuel === 'elec' ? 'electricity' : 'gas';
   if (flag.metric === 'usage') {
     return flag.direction === 'above'
-      ? `Usage is high even after adjusting for the weather, so it isn't just a hot/cold month — a new always-on load or an efficiency regression (e.g. failing equipment) could explain it.`
-      : `Usage is low even after adjusting for the weather — often an efficiency gain, a removed load, or a shorter/estimated read.`;
+      ? `Usage is high even after accounting for the weather, so it isn't just a hot or cold month — something new running all the time, or equipment starting to fail, could explain it.`
+      : `Usage is low even after accounting for the weather — often something you turned off or replaced, or a shorter or estimated meter read.`;
   }
   return flag.direction === 'above'
-    ? `The all-in ${fuel} rate rose more than its recent range — commonly a supply-rate or ESCO price increase, or a change in fixed delivery charges.`
-    : `The all-in ${fuel} rate fell below its recent range — commonly a supply-rate decrease or a billing-period mix shift.`;
+    ? `The ${fuel} price you paid rose more than usual — commonly a supply rate or fixed-charge increase from your provider.`
+    : `The ${fuel} price you paid dropped below its usual range — commonly a supply rate decrease.`;
 }
 
 // Build the structured detail for an anomaly flag (see AnomalyDetail). Formats
@@ -287,7 +287,7 @@ export function describeAnomaly(flag: AnomalyFlag): AnomalyDetail {
   // 3 dp and labelled rather than carrying a noisy compound unit in the value.
   const fmtVal = (v: number) => (isRate ? rate(v) : num(v, 3));
   const rateUnit = flag.fuel === 'elec' ? '$/kWh' : '$/therm';
-  const metricLabel = isRate ? `all-in rate (${rateUnit})` : 'weather-normalized usage intensity';
+  const metricLabel = isRate ? `all-in price (${rateUnit})` : 'weather-adjusted usage';
 
   const deviations = Number.isFinite(flag.deviations)
     ? `${num(flag.deviations, 1)}× the normal month-to-month variation`

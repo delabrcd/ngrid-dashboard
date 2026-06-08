@@ -27,7 +27,7 @@ export type ToolsTab = 'budget' | 'compare' | 'whatif';
 const TABS: { value: ToolsTab; label: string }[] = [
   { value: 'budget', label: 'Budget' },
   { value: 'compare', label: 'Compare periods' },
-  { value: 'whatif', label: 'Supply what-if' },
+  { value: 'whatif', label: 'Switch suppliers' },
 ];
 
 export function ToolsModal({

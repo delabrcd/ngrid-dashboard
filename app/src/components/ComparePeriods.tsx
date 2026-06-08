@@ -55,17 +55,17 @@ function FuelBreakdown({
         <span className={`font-semibold ${accent}`}>{yoyVerdict(res, label, unit)}</span>
       </p>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-500">
-        <span>Raw {signedPct(res.rawUsagePct)} ({num(Math.round(res.rawUsageDelta))} {unit})</span>
-        <span>Weather {num(Math.round(res.weatherExplainedDelta))} {unit}</span>
-        <span>Behaviour {num(Math.round(res.intensityDelta))} {unit}</span>
+        <span>Total change {signedPct(res.rawUsagePct)} ({num(Math.round(res.rawUsageDelta))} {unit})</span>
+        <span>From the weather {num(Math.round(res.weatherExplainedDelta))} {unit}</span>
+        <span>From how you used it {num(Math.round(res.intensityDelta))} {unit}</span>
         {res.normCostDelta != null && (
           <span>
-            Normalized cost{' '}
+            Worth about{' '}
             <span className={res.normCostDelta < 0 ? 'text-emerald-400' : res.normCostDelta > 0 ? 'text-rose-400' : ''}>
               {res.normCostDelta < 0 ? '−' : res.normCostDelta > 0 ? '+' : ''}
               {usd(Math.abs(res.normCostDelta), currencyDecimals)}
             </span>{' '}
-            at current rates
+            at your typical rate
           </span>
         )}
       </div>
@@ -130,8 +130,8 @@ export function ComparePeriods({
           <span
             tabIndex={0}
             role="img"
-            aria-label="Compare any two windows on weather-normalized usage. Raw usage change is split into the part explained by warmer/colder weather (degree-days) and the part that's a genuine usage change, by comparing each period's usage per degree-day. The cost figure prices the intensity change at your current all-in rate (from bill PDF current charges) — it isolates the usage story from weather and rate changes; it is not a real charge."
-            title="Compare any two windows on weather-normalized usage. Raw usage change is split into the part explained by warmer/colder weather (degree-days) and the part that's a genuine usage change, by comparing each period's usage per degree-day. The cost figure prices the intensity change at your current all-in rate (from bill PDF current charges) — it isolates the usage story from weather and rate changes; it is not a real charge."
+            aria-label="Compare any two stretches of time. It splits your usage change into the part caused by warmer or colder weather and the part that's a real change in how much you used. The dollar figure shows what that real usage change is worth at your typical rate, so weather and price swings don't muddy the picture. It's not a real charge."
+            title="Compare any two stretches of time. It splits your usage change into the part caused by warmer or colder weather and the part that's a real change in how much you used. The dollar figure shows what that real usage change is worth at your typical rate, so weather and price swings don't muddy the picture. It's not a real charge."
             className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
           >
             i
@@ -192,7 +192,7 @@ export function ComparePeriods({
       <div className="mt-3 space-y-3">
         {fuelRows.length === 0 ? (
           <p className="text-sm text-slate-500">
-            Not enough usage + degree-day data in both windows to compare. Pick wider ranges.
+            Not enough usage and weather data in both periods to compare. Pick wider ranges.
           </p>
         ) : (
           fuelRows.map(({ key, label, unit, accent, res }) => (

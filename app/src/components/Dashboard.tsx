@@ -220,8 +220,8 @@ export function Dashboard() {
             </span>
           </div>
           <p className="mx-auto mt-2 max-w-prose text-sm text-slate-400">
-            Let&apos;s get set up. Add your National Grid login below — it&apos;s stored encrypted (AES-256-GCM) and used
-            only to scrape your own account&apos;s bills and usage. Adding it runs a real login to verify it; if National
+            Let&apos;s get set up. Add your National Grid login below — it&apos;s stored securely (encrypted) and used
+            only to pull your own account&apos;s bills and usage. Adding it signs in once to check it works; if National
             Grid sends a one-time code you&apos;ll be asked for it here.
           </p>
         </header>
@@ -421,12 +421,12 @@ export function Dashboard() {
             <div className="card !p-3">
               <div className="card-title text-xs">Electric rate</div>
               <div className="stat text-2xl">{rate(elecAllIn)}<span className="text-sm text-slate-500">/kWh</span></div>
-              <div className="sub mt-0.5 text-[11px] text-slate-500">12-mo all-in · supply {rate(lastRow?.elecRateSupply)}</div>
+              <div className="sub mt-0.5 text-[11px] text-slate-500">full price, last 12 mo · supply part {rate(lastRow?.elecRateSupply)}</div>
             </div>
             <div className="card !p-3">
               <div className="card-title text-xs">Gas rate</div>
               <div className="stat text-2xl">{rate(gasAllIn, 2)}<span className="text-sm text-slate-500">/therm</span></div>
-              <div className="sub mt-0.5 text-[11px] text-slate-500">12-mo all-in · supply {rate(lastRow?.gasRateSupply, 2)}</div>
+              <div className="sub mt-0.5 text-[11px] text-slate-500">full price, last 12 mo · supply part {rate(lastRow?.gasRateSupply, 2)}</div>
             </div>
             {ov?.nextBillEstimate ? (
               // Compact estimate card (issue #38): just "Est. next bill", "~$X" and
@@ -468,8 +468,8 @@ export function Dashboard() {
                   <span
                     tabIndex={0}
                     role="img"
-                    aria-label="Location-based estimate: your kWh and therms multiplied by published EPA average emission factors (electricity via the eGRID subregion grid factor, gas at 5.3 kg CO2e/therm). It reflects the regional grid mix, not your specific supply plan. Set gridEmissionFactor in Settings to override."
-                    title="Location-based estimate: your kWh and therms multiplied by published EPA average emission factors (electricity via the eGRID subregion grid factor, gas at 5.3 kg CO2e/therm). It reflects the regional grid mix, not your specific supply plan. Set gridEmissionFactor in Settings to override."
+                    aria-label="An estimate of the carbon emissions from your energy use, based on your electricity and gas and a regional grid average. It reflects the typical mix of power in your area, not your specific plan. You can set your own electricity factor in Settings if you're on a green plan."
+                    title="An estimate of the carbon emissions from your energy use, based on your electricity and gas and a regional grid average. It reflects the typical mix of power in your area, not your specific plan. You can set your own electricity factor in Settings if you're on a green plan."
                     className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
                   >
                     i
@@ -509,8 +509,8 @@ export function Dashboard() {
                   <span
                     tabIndex={0}
                     role="img"
-                    aria-label="Weather-normalized usage change for the latest month vs the same calendar month one year earlier, per fuel. It compares usage per degree-day so a warmer/colder month doesn't masquerade as using less/more — the honest 'did I actually use less' number. Use the Compare periods tool below for the full breakdown and other windows. Not a real charge."
-                    title="Weather-normalized usage change for the latest month vs the same calendar month one year earlier, per fuel. It compares usage per degree-day so a warmer/colder month doesn't masquerade as using less/more — the honest 'did I actually use less' number. Use the Compare periods tool below for the full breakdown and other windows. Not a real charge."
+                    aria-label="How your energy use this month compares to the same month a year ago, after accounting for how hot or cold it was. This tells you whether you actually used more or less — not just whether it was a warmer or colder month. Open the Compare tool for the full breakdown and other date ranges. Not a real charge."
+                    title="How your energy use this month compares to the same month a year ago, after accounting for how hot or cold it was. This tells you whether you actually used more or less — not just whether it was a warmer or colder month. Open the Compare tool for the full breakdown and other date ranges. Not a real charge."
                     className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
                   >
                     i
@@ -528,7 +528,7 @@ export function Dashboard() {
                     </span>
                   ) : null}
                 </div>
-                <div className="sub mt-0.5 text-[11px] text-slate-500">normalized vs last yr · click to compare</div>
+                <div className="sub mt-0.5 text-[11px] text-slate-500">weather-adjusted vs last year · click to compare</div>
               </div>
             ) : null}
             {/* Budget / annual-spend target (issue #46 redesign): the MERGED card.
@@ -572,8 +572,8 @@ export function Dashboard() {
                     <span
                       tabIndex={0}
                       role="img"
-                      aria-label={`Spent ${usd(spent, 0)} of your ${usd(target, 0)} ${fromY} target so far; projected end-of-year total ${usd(projected, 0)} (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). Spent is the sum of this year's bills' actual period charges (currentCharges, the PDF source of truth — never the statement amount due); the projected remainder reuses the next-bill estimate and the seasonal 12-month projection. The on/off-track status is paced against a seasonally-weighted expectation (winter is naturally heavier). Click for the month-by-month breakdown. Set or change the target in Settings. Not a real charge.`}
-                      title={`Spent ${usd(spent, 0)} of your ${usd(target, 0)} ${fromY} target so far; projected end-of-year total ${usd(projected, 0)} (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). Spent is the sum of this year's bills' actual period charges (currentCharges, the PDF source of truth — never the statement amount due); the projected remainder reuses the next-bill estimate and the seasonal 12-month projection. The on/off-track status is paced against a seasonally-weighted expectation (winter is naturally heavier). Click for the month-by-month breakdown. Set or change the target in Settings. Not a real charge.`}
+                      aria-label={`You've spent ${usd(spent, 0)} of your ${usd(target, 0)} target for ${fromY} so far, and we expect about ${usd(projected, 0)} by year's end (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). "Spent" adds up what you were actually charged for energy on this year's bills; the rest of the year is estimated. On-track vs. over budget accounts for winter naturally costing more. Click for the month-by-month breakdown, or set your target in Settings. Not a real charge.`}
+                      title={`You've spent ${usd(spent, 0)} of your ${usd(target, 0)} target for ${fromY} so far, and we expect about ${usd(projected, 0)} by year's end (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). "Spent" adds up what you were actually charged for energy on this year's bills; the rest of the year is estimated. On-track vs. over budget accounts for winter naturally costing more. Click for the month-by-month breakdown, or set your target in Settings. Not a real charge.`}
                       onClick={(e) => e.stopPropagation()}
                       className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
                     >

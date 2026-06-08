@@ -208,12 +208,12 @@ describe('describeAnomaly', () => {
     }));
     expect(d.title).toBe('Electric rate anomaly — May 2026');
     expect(d.headline).toBe('electric rate ~12% above recent rate band');
-    expect(d.metricLabel).toBe('all-in rate ($/kWh)');
+    expect(d.metricLabel).toBe('all-in price ($/kWh)');
     expect(d.latest).toBe('$0.241');
     expect(d.median).toBe('$0.215');
     expect(d.pct).toBe('+12%');
     expect(d.deviations).toBe('5.2× the normal month-to-month variation');
-    expect(d.meaning).toContain('supply-rate or ESCO');
+    expect(d.meaning).toContain('supply rate');
   });
 
   // Gas USAGE anomaly, below, with a non-finite (flat-history) deviation. Usage
@@ -226,7 +226,7 @@ describe('describeAnomaly', () => {
       message: 'gas usage ~23% below weather-normalized expectation',
     }));
     expect(d.title).toBe('Gas usage anomaly — January 2026');
-    expect(d.metricLabel).toBe('weather-normalized usage intensity');
+    expect(d.metricLabel).toBe('weather-adjusted usage');
     expect(d.latest).toBe('0.812');
     expect(d.median).toBe('1.050');
     expect(d.pct).toBe('−23%');
@@ -237,8 +237,8 @@ describe('describeAnomaly', () => {
   // The gas-rate unit is $/therm, and an "above" usage anomaly gets the
   // efficiency-regression / new-load meaning line.
   it('uses $/therm for gas rate and the new-load meaning for usage above', () => {
-    expect(describeAnomaly(mkFlag({ fuel: 'gas', metric: 'rate' })).metricLabel).toBe('all-in rate ($/therm)');
+    expect(describeAnomaly(mkFlag({ fuel: 'gas', metric: 'rate' })).metricLabel).toBe('all-in price ($/therm)');
     const usageAbove = describeAnomaly(mkFlag({ fuel: 'elec', metric: 'usage', direction: 'above' }));
-    expect(usageAbove.meaning).toContain('always-on load');
+    expect(usageAbove.meaning).toContain('running all the time');
   });
 });

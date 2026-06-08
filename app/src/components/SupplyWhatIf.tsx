@@ -59,12 +59,12 @@ export function SupplyWhatIf({ rows, currencyDecimals = 2 }: { rows: MonthRow[];
   return (
     <div className="card relative !p-3">
       <div className="card-title flex items-center gap-1 text-xs">
-        Supply-rate what-if (switch ESCO)
+        What if I switched energy suppliers?
         <span
           tabIndex={0}
           role="img"
-          aria-label="Enter a quoted fixed ESCO supply rate. It back-tests that rate against your actual historical usage (PDF-sourced supply cost ÷ usage), holding delivery constant since it stays with the utility. The result is what you WOULD have paid for supply over the back-tested months — not a real charge or a guaranteed future price."
-          title="Enter a quoted fixed ESCO supply rate. It back-tests that rate against your actual historical usage (PDF-sourced supply cost ÷ usage), holding delivery constant since it stays with the utility. The result is what you WOULD have paid for supply over the back-tested months — not a real charge or a guaranteed future price."
+          aria-label="Thinking of switching to a different energy supplier? Enter their quoted rate and we'll apply it to your past usage to show what you would have paid for the supply part of your bills. Delivery charges stay the same because those always come from the utility. It's a what-if, not a real charge or a promise of future prices."
+          title="Thinking of switching to a different energy supplier? Enter their quoted rate and we'll apply it to your past usage to show what you would have paid for the supply part of your bills. Delivery charges stay the same because those always come from the utility. It's a what-if, not a real charge or a promise of future prices."
           className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-semibold text-slate-400 transition hover:border-slate-400 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
         >
           i
@@ -94,7 +94,7 @@ export function SupplyWhatIf({ rows, currencyDecimals = 2 }: { rows: MonthRow[];
       {/* Result. Hidden until at least one valid rate produces a back-test. */}
       {perFuel.length === 0 ? (
         <p className="mt-2 text-[11px] text-slate-500">
-          Enter a quoted supply rate to back-test it against your actual usage.
+          Enter a supplier&apos;s quoted rate to see what you would have paid with it.
         </p>
       ) : (
         <div className="mt-2 space-y-2">
@@ -116,12 +116,12 @@ export function SupplyWhatIf({ rows, currencyDecimals = 2 }: { rows: MonthRow[];
               <span className={`font-semibold ${savingsLabel(result.delta, dp).cls}`}>
                 {savingsLabel(result.delta, dp).text}
               </span>{' '}
-              over the back-tested period.
+              over this period.
             </p>
           )}
           <p className="text-[11px] text-slate-500">
-            Back-tested over {months} {months === 1 ? 'month' : 'months'} of actual usage in the selected range.
-            Delivery is held constant. Not a real charge.
+            Based on {months} {months === 1 ? 'month' : 'months'} of your actual usage in the selected range.
+            Delivery charges stay the same. Not a real charge.
           </p>
         </div>
       )}

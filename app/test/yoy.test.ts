@@ -50,9 +50,9 @@ describe('compareYoY (hand-calculated)', () => {
 
   it('headline reads "more usage but colder → lower after normalizing"', () => {
     const { elec } = compareYoY(periodA, periodB);
-    // "Electric: +6% kWh, but +14% degree-days — ~7% lower after normalizing."
+    // "Electric: +6% kWh, but +14% heating/cooling weather — ~7% lower once you account for the weather."
     expect(yoyVerdict(elec!, 'Electric', 'kWh')).toBe(
-      'Electric: +6% kWh, but +14% degree-days — ~7% lower after normalizing.'
+      'Electric: +6% kWh, but +14% heating/cooling weather — ~7% lower once you account for the weather.'
     );
   });
 
@@ -75,7 +75,7 @@ describe('compareYoY (hand-calculated)', () => {
     expect(g.weatherExplainedDelta).toBeCloseTo(200, 6); // all of it is weather
     expect(g.intensityDelta).toBeCloseTo(0, 6);
     expect(yoyVerdict(g, 'Gas', 'therms')).toBe(
-      'Gas: +20% therms, but +20% degree-days — about flat after normalizing.'
+      'Gas: +20% therms, but +20% heating/cooling weather — about the same once you account for the weather.'
     );
   });
 
@@ -206,7 +206,7 @@ describe('signedPct + yoyVerdict (presentation, hand-checked)', () => {
     // forcing normalizedPct null.
     const forced = { ...e, rawUsagePct: null, ddPct: null, normalizedPct: null };
     expect(yoyVerdict(forced, 'Electric', 'kWh')).toBe(
-      'Electric: — kWh, but — degree-days — normalized change unavailable.'
+      'Electric: — kWh, but — heating/cooling weather — weather-adjusted change unavailable.'
     );
   });
 });

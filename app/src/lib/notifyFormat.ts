@@ -134,7 +134,7 @@ export function formatAnomalyNotification(
     ``,
     ...flags.map((f) => `• ${f.message}`),
     ``,
-    `These compare the latest period to its robust trailing baseline (weather-normalized usage and all-in $/unit). Not a real charge.`,
+    `These compare your latest bill to what's been typical recently — usage is checked after accounting for the weather. Not a real charge.`,
   ];
   if (link) lines.push(``, `Dashboard: ${link}`);
   // amount is N/A for an anomaly alert; statementDate carries the period label so

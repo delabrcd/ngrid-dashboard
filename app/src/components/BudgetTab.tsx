@@ -131,16 +131,15 @@ export function BudgetTab({
           {usd0(projectedHigh)}
         </div>
         <div className="mt-1 text-[11px] text-slate-500">
-          Expected pace is{' '}
+          Your target is spread{' '}
           {monthly.seasonal ? (
-            <span className="text-slate-400">seasonally weighted</span>
+            <span className="text-slate-400">across the seasons</span>
           ) : (
-            <span className="text-slate-400">split evenly</span>
+            <span className="text-slate-400">evenly</span>
           )}{' '}
-          across the year{monthly.seasonal ? ' — winter months carry a bigger share' : ''}, so a
-          heavy winter bill isn&apos;t flagged the way a heavy summer one would be. Spent uses each
-          bill&apos;s actual period charges (the PDF source of truth), never the statement amount
-          due. Not a real charge.
+          through the year{monthly.seasonal ? ', with more of it set aside for winter' : ''}, so a
+          big winter bill won&apos;t look off-track the way a big summer one would. &ldquo;Spent&rdquo;
+          adds up what you were actually charged for energy on each bill so far. Not a real charge.
         </div>
       </div>
 
@@ -149,8 +148,8 @@ export function BudgetTab({
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-[12px] text-slate-400">
           <span className="text-slate-300">Next 12 months projected: </span>
           ~{usd0(seasonProjection.annual.point)} (range {usd0(seasonProjection.annual.low)}–
-          {usd0(seasonProjection.annual.high)}). Climatological projection (degree-day normals ×
-          current rates) — {seasonProjection.basis}. Not a forecast, not a real charge.
+          {usd0(seasonProjection.annual.high)}). Estimated from {seasonProjection.basis}. Actual
+          bills may vary.
         </div>
       ) : null}
 
@@ -158,7 +157,7 @@ export function BudgetTab({
           chart (not a dashboard chartSpec) — Recharts is already in the bundle. */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
         <div className="mb-2 px-1 text-xs text-slate-400">
-          Actual vs expected pace per month · cumulative lines
+          What you spent each month vs. what was expected · running totals
         </div>
         <div className="h-64 w-full">
           <ResponsiveContainer width="100%" height="100%">

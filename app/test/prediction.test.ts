@@ -192,7 +192,7 @@ describe('estimateNextBill (hand-calculated)', () => {
     expect(est!.point).toBeCloseTo(60.0, 6);
     expect(est!.low).toBeCloseTo(51.0, 6);
     expect(est!.high).toBeCloseTo(69.0, 6);
-    expect(est!.basis).toContain('trailing 3-mo avg');
+    expect(est!.basis).toContain('your last 3 months');
     expect(est!.basis).toContain('±15%');
   });
 

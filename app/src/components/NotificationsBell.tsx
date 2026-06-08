@@ -303,7 +303,7 @@ function AnomalyDetailBody({
       <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5 text-xs">
         <dt className="text-slate-500">This period</dt>
         <dd className="text-right font-medium text-slate-100">{d.latest}</dd>
-        <dt className="text-slate-500">Recent typical (median)</dt>
+        <dt className="text-slate-500">Recent typical</dt>
         <dd className="text-right text-slate-300">{d.median}</dd>
         <dt className="text-slate-500">Difference</dt>
         <dd className="text-right text-slate-300">{d.pct}</dd>
