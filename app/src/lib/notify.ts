@@ -20,11 +20,16 @@
 // the whole bill history.
 import nodemailer from 'nodemailer';
 import { getSetting, setSetting } from '@/lib/settings';
+import type { AnomalyFlag } from '@/lib/anomaly';
 import {
   LAST_NOTIFIED_KEY,
+  ANOMALY_NOTIFY_ENABLED_KEY,
+  LAST_ANOMALY_NOTIFIED_KEY,
   formatBillNotification,
+  formatAnomalyNotification,
   resolveChannel,
   selectBillsToNotify,
+  shouldNotifyAnomaly,
   type BillNotification,
   type NotifiableBill,
   type NotifyChannel,
@@ -35,9 +40,13 @@ import {
 // keep importing from `@/lib/notify` unchanged.
 export {
   LAST_NOTIFIED_KEY,
+  ANOMALY_NOTIFY_ENABLED_KEY,
+  LAST_ANOMALY_NOTIFIED_KEY,
   formatBillNotification,
+  formatAnomalyNotification,
   resolveChannel,
   selectBillsToNotify,
+  shouldNotifyAnomaly,
   type BillNotification,
   type NotifiableBill,
   type NotifyChannel,
@@ -150,4 +159,51 @@ export async function notifyNewBills(
   }
   if (sent > 0) log(`notify: sent ${sent} new-bill ${sent === 1 ? 'notification' : 'notifications'} via ${channel}`);
   return { sent, channel, seeded: false };
+}
+
+// ── Impure: anomaly alert on a flagged new bill (issue #45) ───────────────────
+// Called by run.ts after a SCHEDULED scrape, alongside notifyNewBills. OFF by
+// default (gated on the anomalyNotifyEnabled AppSetting) and dedup-safe (a YYYYMM
+// watermark in lastAnomalyNotifiedYm), so an anomaly alert sends at most once per
+// flagged period across restarts. Like notifyNewBills it seeds the watermark on
+// first run WITHOUT notifying, and is fully contained — every failure mode is
+// caught so it can never fail or slow a good scrape. Returns a small summary.
+export async function notifyAnomaly(
+  flags: AnomalyFlag[],
+  ym: number | null,
+  log: (msg: string) => void = () => {},
+  env: NotifyEnv = process.env
+): Promise<{ sent: boolean; channel: NotifyChannel; seeded: boolean }> {
+  const channel = resolveChannel(env);
+
+  // Dedupe watermark first, so first-run seeding happens regardless of the toggle
+  // — turning the feature on later never replays an already-present anomaly.
+  const watermark = (await getSetting(LAST_ANOMALY_NOTIFIED_KEY)) ?? null;
+  const flaggedYm = flags.length ? ym : null; // only a real flag advances the watermark
+  const { notify, newWatermark } = shouldNotifyAnomaly(flaggedYm, watermark);
+
+  if (watermark === null && newWatermark != null) {
+    await setSetting(LAST_ANOMALY_NOTIFIED_KEY, newWatermark);
+    log(`notify(anomaly): seeded watermark to ${newWatermark} (no notification on first run)`);
+    return { sent: false, channel, seeded: true };
+  }
+
+  // OFF by default: the feature is gated on its own AppSetting toggle.
+  const enabled = (await getSetting(ANOMALY_NOTIFY_ENABLED_KEY)) === 'true';
+  if (!enabled) return { sent: false, channel, seeded: false };
+  if (channel === 'off') return { sent: false, channel, seeded: false };
+  if (!notify || flaggedYm == null) return { sent: false, channel, seeded: false };
+
+  const baseUrl = env.APP_BASE_URL || undefined;
+  const n = formatAnomalyNotification(flags, flaggedYm, baseUrl);
+  try {
+    await dispatch(channel, n, env);
+  } catch (err: any) {
+    // Leave the watermark unadvanced so we retry next scheduled scrape.
+    log(`notify(anomaly): ${channel} send failed for ${flaggedYm}: ${String(err?.message || err).slice(0, 200)}`);
+    return { sent: false, channel, seeded: false };
+  }
+  if (newWatermark != null) await setSetting(LAST_ANOMALY_NOTIFIED_KEY, newWatermark);
+  log(`notify(anomaly): sent anomaly alert for ${flaggedYm} via ${channel}`);
+  return { sent: true, channel, seeded: false };
 }

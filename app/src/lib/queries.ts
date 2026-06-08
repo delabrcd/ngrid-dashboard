@@ -23,6 +23,7 @@ import {
   type YoyResult,
   type BudgetFuturePeriod,
 } from '@/lib/series';
+import { detectAnomalies } from '@/lib/anomaly';
 import { ymAddMonths } from '@/lib/ym';
 import { seasonNormalsByMonth, nextBillWindowDegreeDays } from '@/lib/weather/expectedDegreeDaysSync';
 import { shapeAccount, type AccountSummary } from '@/lib/accountSwitcher';
@@ -252,6 +253,15 @@ export async function getOverview(accountId: number) {
   // number, never fed to /api/verify. The full interactive period-compare tool
   // computes its own windows client-side from the loaded series.
   const latestYoy: YoyResult | null = latestVsYearAgo(series);
+  // Usage/cost anomaly detection (issue #45). Flags when the latest period's
+  // weather-normalized intensity (kwhPerDegreeDay/thermsPerHdd) or all-in $/unit
+  // (elecRateAllIn/gasRateAllIn) deviates from its robust trailing baseline
+  // (> k·MAD from the trailing median) — so a merely-cold month does NOT trip it
+  // but a genuine efficiency regression or a supply-rate/ESCO jump does. PURE
+  // (detectAnomalies); all inputs are currentCharges-derived, never the API
+  // amount due, and this never feeds /api/verify. Surfaced as a subtle callout
+  // that renders nothing when `flags` is empty.
+  const anomalies = detectAnomalies(series);
   // Budget / annual-spend target with on-track projection (issue #46). The target
   // is a per-account runtime AppSetting; the window defaults to the CALENDAR YEAR
   // of the latest usage month (so "spent so far" and the projection are about the
@@ -306,6 +316,7 @@ export async function getOverview(accountId: number) {
     emissions,
     latestYoy,
     budget,
+    anomalies,
     latestBill: latest
       ? {
           statementDate: latest.statementDate,

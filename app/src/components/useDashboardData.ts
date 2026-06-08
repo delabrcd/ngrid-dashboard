@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { MonthRow } from '@/lib/chartSpec';
 import type { YoyResult } from '@/lib/series';
+import type { AnomalyResult } from '@/lib/anomaly';
 import { resolveSelectedAccountId, type AccountSummary } from '@/lib/accountSwitcher';
 import { usePrefs } from '@/lib/prefs';
 import { useScrapeProgress } from './ScrapeProgress';
@@ -63,6 +64,11 @@ export interface Overview {
     delta: number;
     status: 'over' | 'under' | 'on_track';
   } | null;
+  // Usage/cost anomaly detection (issue #45): typed flags when the latest
+  // period's weather-normalized intensity or all-in $/unit deviates from its
+  // robust trailing baseline. `flags` is empty when nothing is anomalous (the
+  // callout then renders nothing). Computed purely server-side (detectAnomalies).
+  anomalies?: AnomalyResult | null;
   latestBill?: { statementDate: string; totalDueAmount: number | null } | null;
   firstStatement?: string | null;
   schedule?: { predictedNextBillDate: string | null; nextCheckAt: string | null; lastCheckedAt: string | null } | null;

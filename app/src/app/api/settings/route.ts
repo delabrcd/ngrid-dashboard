@@ -17,6 +17,10 @@ export async function GET() {
   // Budget / annual-spend target (issue #46): the raw target the user has set
   // (empty when unset) so the Settings UI can show + edit it.
   const budgetTarget = (await getSetting('budgetTarget')) ?? '';
+  // Anomaly alert on a flagged new bill (issue #45): OFF by default. The boolean
+  // toggle reuses the existing new-bill notification channel; it only sends when a
+  // channel is configured AND this is on.
+  const anomalyNotifyEnabled = (await getSetting('anomalyNotifyEnabled')) === 'true';
   return NextResponse.json({
     schedulerEnabled: await isSchedulerEnabled(),
     notify: await getNotifyStatus(),
@@ -28,6 +32,7 @@ export async function GET() {
     gridEmissionFactor,
     effectiveGridFactor,
     budgetTarget,
+    anomalyNotifyEnabled,
   });
 }
 
@@ -61,11 +66,18 @@ export async function POST(req: Request) {
       if (Number.isFinite(n) && n > 0) await setSetting('budgetTarget', String(n));
     }
   }
+  // Anomaly alert toggle (issue #45). OFF by default; a plain boolean stored as a
+  // string, like schedulerEnabled. Reuses the configured notification channel.
+  if (typeof body.anomalyNotifyEnabled === 'boolean') {
+    await setSetting('anomalyNotifyEnabled', String(body.anomalyNotifyEnabled));
+  }
   const gridEmissionFactor = (await getSetting('gridEmissionFactor')) ?? '';
   const budgetTarget = (await getSetting('budgetTarget')) ?? '';
+  const anomalyNotifyEnabled = (await getSetting('anomalyNotifyEnabled')) === 'true';
   return NextResponse.json({
     schedulerEnabled: await isSchedulerEnabled(),
     gridEmissionFactor,
     budgetTarget,
+    anomalyNotifyEnabled,
   });
 }

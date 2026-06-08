@@ -26,6 +26,9 @@ interface ServerSettings {
   // Budget / annual-spend target (issue #46). The raw target dollars (empty when
   // unset). Calendar-year window; tracked on the dashboard's budget card.
   budgetTarget?: string;
+  // Anomaly alert on a flagged new bill (issue #45). OFF by default; reuses the
+  // configured new-bill notification channel.
+  anomalyNotifyEnabled?: boolean;
 }
 interface Run {
   id: number;
@@ -64,6 +67,9 @@ export function SettingsView() {
   // server value once loaded. Empty = no target (the dashboard budget card hides).
   const [budgetTarget, setBudgetTarget] = useState('');
   const [savingBudget, setSavingBudget] = useState(false);
+  // Anomaly alert toggle (issue #45). OFF by default; saved on flip like the
+  // scheduler toggle.
+  const [savingAnomaly, setSavingAnomaly] = useState(false);
   const [verify, setVerify] = useState<{ ok: boolean; total: number; failed: number; bills: { statementDate: string; ok: boolean; checks: { name: string; ok: boolean; detail?: string }[] }[] } | null>(null);
   const [verifying, setVerifying] = useState(false);
   // Bill-PDF bulk-download range. Empty until the user (or the loaded account)
@@ -129,6 +135,16 @@ export function SettingsView() {
     setServer((s) => (s ? { ...s, schedulerEnabled: enabled } : s));
     await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ schedulerEnabled: enabled }) });
     setSavingSched(false);
+    loadServer();
+  };
+
+  // Toggle the anomaly alert on a flagged new bill (issue #45). OFF by default;
+  // optimistic update then reload. Reuses the configured notification channel.
+  const setAnomalyNotify = async (enabled: boolean) => {
+    setSavingAnomaly(true);
+    setServer((s) => (s ? { ...s, anomalyNotifyEnabled: enabled } : s));
+    await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ anomalyNotifyEnabled: enabled }) });
+    setSavingAnomaly(false);
     loadServer();
   };
 
@@ -398,6 +414,22 @@ export function SettingsView() {
               Last notified through statement <span className="text-slate-300">{dateLabel(server.notify.lastNotifiedStatementDate)}</span>
             </div>
           )}
+
+          {/* Anomaly alert on a flagged new bill (issue #45). OFF by default;
+              reuses the configured channel above and only fires when a scheduled
+              scrape brings in a bill whose weather-normalized usage or all-in rate
+              is well outside its robust trailing baseline (at most once per bill). */}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Alert on bill anomalies</div>
+              <div className="text-xs text-slate-500">
+                Sends one alert on the channel above when a new bill&apos;s weather-normalized usage or all-in rate breaks
+                from its recent baseline. {savingAnomaly ? 'Saving…' : 'Off by default.'}
+                {server?.notify && !server.notify.configured ? ' Configure a channel (above) for this to send.' : ''}
+              </div>
+            </div>
+            <Toggle checked={!!server?.anomalyNotifyEnabled} onChange={setAnomalyNotify} />
+          </div>
         </div>
       </section>
 

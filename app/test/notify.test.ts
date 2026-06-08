@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatBillNotification,
+  formatAnomalyNotification,
   resolveChannel,
   selectBillsToNotify,
+  shouldNotifyAnomaly,
   type NotifiableBill,
 } from '../src/lib/notifyFormat';
+import type { AnomalyFlag } from '../src/lib/anomaly';
 
 const D = (s: string) => new Date(s + 'T00:00:00Z');
 
@@ -121,5 +124,61 @@ describe('resolveChannel (env → channel)', () => {
     expect(resolveChannel({ NOTIFY_WEBHOOK_URL: 'https://x' })).toBe('webhook');
     expect(resolveChannel({ NTFY_TOPIC: 'mytopic' })).toBe('ntfy');
     expect(resolveChannel({ SMTP_HOST: 'smtp.example.com' })).toBe('smtp');
+  });
+});
+
+describe('anomaly notification helpers (issue #45, pure)', () => {
+  const flag = (over: Partial<AnomalyFlag>): AnomalyFlag => ({
+    fuel: 'elec', metric: 'usage', direction: 'above', ym: 202503,
+    latest: 1.3, median: 1.0, pct: 0.3, deviations: 10,
+    message: 'electric usage ~30% above weather-normalized expectation', ...over,
+  });
+
+  describe('formatAnomalyNotification', () => {
+    it('a single flag yields a subject with its message and a bulleted body', () => {
+      const n = formatAnomalyNotification([flag({})], 202503);
+      expect(n.subject).toBe('National Grid anomaly: electric usage ~30% above weather-normalized expectation (2025-03)');
+      expect(n.body).toContain('• electric usage ~30% above weather-normalized expectation');
+      expect(n.body).toContain('Not a real charge.');
+      expect(n.amount).toBeNull();
+      expect(n.statementDate).toBe('2025-03');
+      expect(n.link).toBeUndefined();
+    });
+
+    it('multiple flags summarize the count and list each', () => {
+      const n = formatAnomalyNotification(
+        [flag({}), flag({ fuel: 'gas', metric: 'rate', message: 'gas rate ~22% above recent rate band' })],
+        202503
+      );
+      expect(n.subject).toBe('National Grid anomalies (2) for 2025-03');
+      expect(n.body).toContain('• electric usage ~30% above weather-normalized expectation');
+      expect(n.body).toContain('• gas rate ~22% above recent rate band');
+    });
+
+    it('appends a dashboard link when a baseUrl is given', () => {
+      const n = formatAnomalyNotification([flag({})], 202503, 'https://ng.example.com/');
+      expect(n.link).toBe('https://ng.example.com/');
+      expect(n.body).toContain('Dashboard: https://ng.example.com/');
+    });
+  });
+
+  describe('shouldNotifyAnomaly (watermark dedupe, YYYYMM)', () => {
+    it('first run (null watermark) seeds without notifying', () => {
+      expect(shouldNotifyAnomaly(202503, null)).toEqual({ notify: false, newWatermark: '202503' });
+    });
+
+    it('notifies only when the flagged period is strictly newer than the watermark', () => {
+      expect(shouldNotifyAnomaly(202504, '202503')).toEqual({ notify: true, newWatermark: '202504' });
+    });
+
+    it('is a no-op when the flagged period is not newer (same or older)', () => {
+      expect(shouldNotifyAnomaly(202503, '202503')).toEqual({ notify: false, newWatermark: '202503' });
+      expect(shouldNotifyAnomaly(202502, '202503')).toEqual({ notify: false, newWatermark: '202503' });
+    });
+
+    it('leaves the watermark untouched when there is no flagged period', () => {
+      expect(shouldNotifyAnomaly(null, '202503')).toEqual({ notify: false, newWatermark: '202503' });
+      expect(shouldNotifyAnomaly(null, null)).toEqual({ notify: false, newWatermark: null });
+    });
   });
 });

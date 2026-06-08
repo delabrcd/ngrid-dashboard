@@ -162,6 +162,13 @@ export function Dashboard() {
   // arithmetic happened server-side (ov.budget); this only renders it.
   const budget = ov?.budget ?? null;
 
+  // Usage/cost anomaly callout (issue #45). A SUBTLE, self-hiding banner: it
+  // renders ONLY when the server flagged something on the latest period (the
+  // weather-normalized intensity or all-in $/unit deviating from its robust
+  // trailing baseline), and nothing at all otherwise — no always-on panel. All
+  // the detection happened server-side (ov.anomalies, pure detectAnomalies).
+  const anomalyFlags = ov?.anomalies?.flags ?? [];
+
   // On-demand Tools modal (UX refactor): the interactive Compare-periods (#47) and
   // Supply what-if (#48) tools no longer sit always-visible below the strip — they
   // live in a centered modal opened by the header "Tools" button or the
@@ -591,6 +598,34 @@ export function Dashboard() {
             <div className="shrink-0 text-[11px] text-slate-500">
               Want to track an annual spending target?{' '}
               <Link href="/settings" className="text-amber-400 hover:underline">Set a budget</Link>.
+            </div>
+          ) : null}
+
+          {/* Usage/cost anomaly callout (issue #45). Subtle, self-hiding amber
+              banner shown ONLY when the latest period tripped an anomaly check
+              (weather-normalized usage or all-in rate well outside its robust
+              trailing baseline) — renders nothing when there's nothing to flag.
+              Each flag's wording comes from the server (detectAnomalies). */}
+          {anomalyFlags.length > 0 ? (
+            <div className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+              <div className="flex flex-wrap items-start gap-2">
+                <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.42 0z" />
+                </svg>
+                <div>
+                  <span className="font-medium">
+                    {anomalyFlags.length === 1 ? 'Anomaly detected on your latest bill' : `${anomalyFlags.length} anomalies on your latest bill`}
+                  </span>
+                  <ul className="mt-0.5 space-y-0.5 text-xs text-amber-200/85">
+                    {anomalyFlags.map((f) => (
+                      <li key={`${f.fuel}-${f.metric}`}>• {f.message}</li>
+                    ))}
+                  </ul>
+                  <div className="mt-0.5 text-[11px] text-amber-200/60">
+                    Compared to your robust trailing baseline (weather-normalized usage &amp; all-in $/unit). Not a real charge.
+                  </div>
+                </div>
+              </div>
             </div>
           ) : null}
 
