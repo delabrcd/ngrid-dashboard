@@ -174,7 +174,12 @@ export function NotificationsBell({
         <div
           role="menu"
           aria-label="Notifications"
-          className="absolute right-0 z-40 mt-2 w-80 max-w-[90vw] overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl"
+          // Mobile (< sm): a viewport-pinned panel — fixed, near-full-width with small
+          // side margins (inset-x-2) just under the header, clamped to the viewport
+          // width and a max-height with internal scroll, so it can't overflow off the
+          // left/right of a narrow phone screen. Desktop (sm+): the original anchored
+          // popover (absolute, right-aligned under the bell, fixed width).
+          className="fixed inset-x-2 top-16 z-40 flex max-h-[70vh] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:max-h-none sm:w-80 sm:max-w-[90vw]"
         >
           <div className="flex items-center justify-between gap-2 border-b border-slate-800/70 px-3 py-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Notifications</span>
@@ -207,7 +212,7 @@ export function NotificationsBell({
             </label>
           </div>
 
-          <ul className="max-h-80 overflow-y-auto">
+          <ul className="min-h-0 flex-1 overflow-y-auto sm:max-h-80 sm:flex-none">
             {visible.length === 0 ? (
               <li className="px-3 py-6 text-center text-xs text-slate-500">
                 {showRead ? 'No notifications' : 'No unread notifications'}
