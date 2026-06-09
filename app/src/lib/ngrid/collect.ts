@@ -19,6 +19,14 @@ import { contextOptions, ensureLoggedIn, dataDir, saveState } from './auth';
 import { extractAccountLinks, buildNavUrl } from './accounts';
 import { parseBillPdf } from './parsePdf';
 import { summarizeGqlRequest, summarizeGqlResponse } from './intervalDebug';
+import {
+  amiIntervalUrl,
+  backfillStartFor,
+  extractAmiMeters,
+  parseIntervalReads,
+  unitForFuel,
+  type IntervalReadRow,
+} from './interval';
 import type {
   AccountInfo,
   BillRow,
@@ -441,5 +449,57 @@ async function collectOneAccount(
     log('warning: no auth headers captured; skipping PDF download');
   }
 
-  return { account: acct, bills, usage, costs: costRows, weather, pdfsDownloaded };
+  // ---- smart-meter AMI interval reads (issue #76) -------------------------
+  // Pull recent interval usage from the amiadapter REST endpoint, reusing the
+  // captured auth headers (same gateway as the PDF download — no account-number
+  // header here, that's PDF-specific). PURELY observational: these rows NEVER
+  // feed billed-cost numbers (AGENTS.md rule #1). Good-guest (rule #4): AMI-gated
+  // per meter, ONE windowed request per meter per run, SEQUENTIAL, no retry storm.
+  // Fully try/catch-wrapped so an interval-fetch hiccup can never break a scrape.
+  const intervals: IntervalReadRow[] = [];
+  try {
+    const meters = extractAmiMeters(cap.account);
+    if (!haveAuth) {
+      log('interval: no auth headers; skipping AMI interval fetch');
+    } else if (!meters.length) {
+      log('interval: no AMI smart meter on this account; skipping interval fetch');
+    } else if (!acct.premiseNumber) {
+      log('interval: no premise number; skipping interval fetch');
+    } else {
+      const windowDays = Number.parseInt(process.env.INTERVAL_WINDOW_DAYS || '', 10);
+      const startDateTime = backfillStartFor(
+        new Date(),
+        null, // lastStored unknown here; persist's upsert makes re-fetch idempotent
+        process.env.INTERVAL_BACKFILL_FROM,
+        Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 35
+      );
+      for (const meter of meters) {
+        try {
+          const url = amiIntervalUrl(BASE, acct.premiseNumber, meter.servicePointNumber, startDateTime);
+          log(`interval: fetching ${meter.fuelType} reads (sp ${meter.servicePointNumber})`);
+          const r = await ctx.request.get(url, { headers: authHeaders, timeout: 30000 });
+          if (r.ok()) {
+            const json = await r.json().catch(() => null);
+            if (Array.isArray(json)) {
+              const rows = parseIntervalReads(json, meter.fuelType, unitForFuel(meter.fuelType));
+              intervals.push(...rows);
+              log(`interval: ${rows.length} ${meter.fuelType} reads since ${startDateTime}`);
+            } else {
+              log(`interval: ${meter.fuelType} response was not an array; skipping`);
+            }
+          } else {
+            log(`interval: ${meter.fuelType} fetch returned HTTP ${r.status()}; skipping`);
+          }
+        } catch (err) {
+          log(`interval: ${meter.fuelType} fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        // Keep the per-request settle rhythm so we stay a good guest.
+        await page.waitForTimeout(1500).catch(() => {});
+      }
+    }
+  } catch (err) {
+    log(`interval: AMI ingest skipped (${err instanceof Error ? err.message : String(err)})`);
+  }
+
+  return { account: acct, bills, usage, costs: costRows, weather, intervals, pdfsDownloaded };
 }
