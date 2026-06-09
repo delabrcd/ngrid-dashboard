@@ -104,44 +104,55 @@ body {
   background: rgba(245, 158, 11, 0.1); /* amber-500/10 */
 }
 
-/* ── Stat-card content fit (issue #73) ─────────────────────────────────────
-   The operator's rule: a stat card's title + headline (+ the budget progress
-   bar) must ALWAYS show, the optional detail/sub line hides when the tile is too
-   short, and text NEVER flows off the card. We do this DECLARATIVELY with a CSS
-   container query — no JS measuring, no setTimeout band-aid: the card is a
-   size query container, and `.stat-detail` is hidden when the card's own height
-   drops below the threshold at which the detail line would fit.
+/* ── Stat-card content fit (issue #73; compact-stat-cards iteration) ─────────
+   The compact card body is just the (brief) title + the headline value (+ the
+   budget progress bar) — the old optional sub/detail line moved into the ⓘ tooltip.
+   The card's own `minH` (derived from cardFit.ts) guarantees the title + headline
+   fit VERTICALLY, and `overflow-hidden` is the hard backstop.
 
-   The thresholds MIRROR lib/widgets/cardFit.ts (the single source for the
-   arithmetic). A CSS `@container (max-height: …)` query measures the query
-   container's CONTENT box (NOT its border box), so the thresholds here are the
-   CONTENT-box values cardFit.contentDetailThresholdPx() returns —
-   detailHeightPx − the card's vertical padding: simple = 88 − 24 = 64px,
-   budget = 100 − 24 = 76px (the budget card reserves a progress bar, so its sub
-   line hides a little earlier). We hide one px below those so the line is gone the
-   moment it wouldn't fully fit. `overflow-hidden` on the card (set in
-   StatCard.tsx) is the hard backstop: even mid-threshold the card clips to its
-   tile, so text can never spill out. */
+   The horizontal fit problem: at the single-row default a card can be as narrow as
+   ~1/12 of the strip (w=1 ≈ 105px), where a full headline like "~$192.24" or
+   "~$3,003 / $2,800" at the base text-2xl would be ellipsized — cutting the NUMBER,
+   which defeats the card. So we make each card an inline-size QUERY CONTAINER and
+   step the headline font DOWN on narrow tiles (a fluid, resize-robust fit — no JS
+   measuring): the value shrinks to stay fully visible instead of truncating. The
+   TITLE still `truncate`s (set in StatCard.tsx) — a long title ellipsizes, which is
+   acceptable, but the headline value scales to remain whole. `inline-size` (not
+   `size`) constrains only the width axis, so the strip's natural-height growth and
+   the vertical minH are untouched. */
 .stat-card {
-  container-type: size;
+  container-type: inline-size;
 }
-/* In the PINNED stat strip the cards must grow to their natural content height so
-   nothing is clipped (the strip is their full presentation). Turning containment
-   off here also stops the hide-the-detail query from matching, so the strip always
-   shows the complete card. Size containment + the query stay active for the
-   resizable RGL grid tiles, where the tile dictates the height. */
-.ngrid-stat-strip .stat-card {
-  container-type: normal;
-}
-@container (max-height: 63px) {
-  .stat-card .stat-detail {
-    display: none;
+/* Headline type steps, keyed on the card's own width (content-box). The base is
+   text-2xl (1.5rem); below ~210px / ~150px / ~120px we drop to xl / lg / base so the
+   widest headlines ("~$3,003 / $2,800", "~$192.24", "~4,273 kg") stay whole at the
+   narrow w=1 / w=2 tiles. The smaller trailing unit span (text-sm) scales with it.
+   These thresholds are presentation-only (no number logic), tuned to the actual
+   headline widths verified headlessly (scrollWidth <= clientWidth at every step). */
+@container (max-width: 210px) {
+  .stat-card .stat {
+    font-size: 1.25rem; /* text-xl */
+    line-height: 1.75rem;
   }
 }
-/* The budget card's bar is essential, so its sub line hides a little earlier
-   (a taller threshold) — its dedicated class wins via specificity/order. */
-@container (max-height: 75px) {
-  .stat-card-budget .stat-detail {
+@container (max-width: 150px) {
+  .stat-card .stat {
+    font-size: 1.125rem; /* text-lg */
+    line-height: 1.6rem;
+  }
+}
+@container (max-width: 120px) {
+  .stat-card .stat {
+    font-size: 0.95rem; /* ~text-base */
+    line-height: 1.4rem;
+  }
+}
+/* On a too-narrow budget tile, drop the secondary " / target" tail so the
+   projected headline stays whole (the bar's tick + the ⓘ still carry the target).
+   The default strip gives budget w=2, so this only engages if a user resizes it
+   narrow. */
+@container (max-width: 150px) {
+  .stat-card-budget .budget-target {
     display: none;
   }
 }

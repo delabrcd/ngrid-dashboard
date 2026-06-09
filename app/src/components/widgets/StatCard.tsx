@@ -1,11 +1,11 @@
 'use client';
 
-// Shared stat-card renderers (Phase A, issue #93). These turn the PURE
-// selector output from lib/widgets/statSpec.ts into the EXACT markup the old
-// hardcoded Dashboard.tsx cards produced — same `.card !p-3`, `.card-title
-// text-xs`, `.stat text-2xl`, `.sub mt-0.5 text-[11px] text-slate-500`, and the
-// ⓘ span. Phase A is a render-identical refactor, so the class strings here are
-// copied verbatim from the deleted JSX; do not "tidy" them.
+// Shared stat-card renderers (Phase A, issue #93; compact-stat-cards iteration).
+// These turn the PURE selector output from lib/widgets/statSpec.ts into the card
+// markup: a COMPACT body of the (brief) title (+ its ⓘ) and the headline value
+// only. The old sub/detail line moved into the ⓘ tooltip, the padding tightened to
+// `!p-2`, and the title + value `truncate` so a narrow (w=1) tile ellipsizes rather
+// than overflowing — `overflow-hidden` on the card is the hard backstop.
 
 import type {
   BudgetStatModel,
@@ -38,22 +38,23 @@ function InfoDot({ tooltip, ring, stop }: { tooltip: string; ring: string; stop?
 const tooltipRing = (accent: StatTooltip['accent']) =>
   accent === 'emerald' ? 'focus:ring-emerald-500/60' : 'focus:ring-amber-500/60';
 
-// SIMPLE card: the 4 fixed + Est-next + Carbon. Renders title (+ optional ⓘ),
-// the stat value (with the optional smaller unit span), and the sub line. When
-// a tooltip is present the card gets `relative` exactly as the old estimate /
-// carbon blocks did.
+// SIMPLE card: the 4 fixed + Est-next + Carbon. COMPACT body — just the (brief)
+// title (+ its ⓘ) and the headline value; the old sub/detail line moved into the
+// tooltip (the compact-stat-cards iteration). The card is `relative` to anchor the
+// ⓘ ring, exactly as the old estimate / carbon blocks were.
 export function StatCard({ model }: { model: StatCardModel }) {
   return (
     // h-full so the card fills its placed grid cell (Phase E, #73); the content
-    // stays top-aligned. `stat-card` makes the card a CSS QUERY CONTAINER and
-    // `overflow-hidden` clips it to its tile so content can never spill out
-    // (issue #73 content-fit). Markup is otherwise byte-identical to the old card.
-    <div className={`stat-card card h-full overflow-hidden !p-3${model.tooltip ? ' relative' : ''}`}>
-      <div className={`card-title text-xs${model.tooltip ? ' flex items-center gap-1' : ''}`}>
-        {model.title}
-        {model.tooltip ? <InfoDot tooltip={model.tooltip.text} ring={tooltipRing(model.tooltip.accent)} /> : null}
+    // stays top-aligned. `overflow-hidden` clips it to its tile so content can never
+    // spill out (issue #73 content-fit). Compact `!p-2` padding (was `!p-3`).
+    <div className="stat-card card relative h-full overflow-hidden !p-2">
+      <div className="card-title flex items-center gap-1 text-xs">
+        {/* `truncate` so a too-long title ellipsizes rather than overflowing a
+            narrow (w=1) tile — title + headline must never clip (issue #73). */}
+        <span className="min-w-0 truncate">{model.title}</span>
+        <InfoDot tooltip={model.tooltip.text} ring={tooltipRing(model.tooltip.accent)} />
       </div>
-      <div className="stat text-2xl">
+      <div className="stat truncate text-2xl">
         {typeof model.value === 'string' ? (
           model.value
         ) : (
@@ -63,10 +64,6 @@ export function StatCard({ model }: { model: StatCardModel }) {
           </>
         )}
       </div>
-      {/* The OPTIONAL detail line. `stat-detail` is hidden by a CSS container
-          query when the card is too short to fit it (globals.css), so the sub
-          text NEVER overflows the tile — title + headline always remain. */}
-      <div className="stat-detail sub mt-0.5 text-[11px] text-slate-500">{model.sub}</div>
     </div>
   );
 }
@@ -90,13 +87,15 @@ export function YoyStatCard({ model, openTools }: { model: YoyStatModel; openToo
       tabIndex={0}
       onClick={() => openTools('compare')}
       onKeyDown={activate(() => openTools('compare'))}
-      className="stat-card card relative h-full cursor-pointer overflow-hidden !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+      className="stat-card card relative h-full cursor-pointer overflow-hidden !p-2 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
     >
       <div className="card-title flex items-center gap-1 text-xs">
-        vs last year
+        <span className="min-w-0 truncate">vs last year</span>
         <InfoDot tooltip={model.tooltip} ring="focus:ring-amber-500/60" />
       </div>
-      <div className="stat flex items-baseline gap-2 text-2xl">
+      {/* Compact deltas only ("Elec −19% Gas −3%"); the "weather-adjusted vs last
+          year · click to compare" detail moved into the ⓘ tooltip. */}
+      <div className="stat flex items-baseline gap-2 truncate text-2xl">
         {model.elec ? (
           <span>
             <span className="text-sm text-amber-400">Elec</span> <span className={model.elec.cls}>{model.elec.pct}</span>
@@ -108,7 +107,6 @@ export function YoyStatCard({ model, openTools }: { model: YoyStatModel; openToo
           </span>
         ) : null}
       </div>
-      <div className="stat-detail sub mt-0.5 text-[11px] text-slate-500">weather-adjusted vs last year · click to compare</div>
     </div>
   );
 }
@@ -122,18 +120,23 @@ export function BudgetStatCard({ model, openTools }: { model: BudgetStatModel; o
       tabIndex={0}
       onClick={() => openTools('budget')}
       onKeyDown={activate(() => openTools('budget'))}
-      className="stat-card stat-card-budget card relative h-full cursor-pointer overflow-hidden !p-3 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
+      className="stat-card stat-card-budget card relative h-full cursor-pointer overflow-hidden !p-2 transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60"
     >
       <div className="card-title flex items-center gap-1 text-xs">
-        Budget {model.fromY}
+        <span className="min-w-0 truncate">Budget {model.fromY}</span>
         <InfoDot tooltip={model.tooltip} ring="focus:ring-amber-500/60" stop />
       </div>
-      <div className="stat text-2xl">
+      <div className="stat truncate text-2xl">
         ~{model.projected}
-        <span className="text-sm text-slate-500"> / {model.target}</span>
+        {/* The " / target" tail is secondary (the bar's tick + the ⓘ also carry the
+            target) — it's hidden by a container query on a too-narrow tile so the
+            projected headline number stays whole instead of truncating (globals.css
+            `.budget-target`). */}
+        <span className="budget-target text-sm text-slate-500"> / {model.target}</span>
       </div>
       {/* Progress bar: spent solid, projected-remaining lighter, with a target
-          tick. Overflows into a rose tint when over budget. */}
+          tick. Overflows into a rose tint when over budget. The "over by $X · click
+          for breakdown" status line moved into the ⓘ tooltip (compact iteration). */}
       <div className="relative mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
         <div className="absolute inset-y-0 left-0 flex">
           <div className={model.over ? 'bg-rose-500/80' : 'bg-amber-400'} style={{ width: `${model.spentPct}%` }} />
@@ -141,7 +144,6 @@ export function BudgetStatCard({ model, openTools }: { model: BudgetStatModel; o
         </div>
         <div className="absolute inset-y-0 w-px bg-slate-300/80" style={{ left: `${model.targetPct}%` }} />
       </div>
-      <div className={`stat-detail sub mt-0.5 text-[11px] ${model.statusColor}`}>{model.statusLabel} · click for breakdown</div>
     </div>
   );
 }

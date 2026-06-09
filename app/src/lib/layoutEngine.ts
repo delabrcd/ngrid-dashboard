@@ -189,19 +189,21 @@ function withMins(p: Placement, mins: WidgetMins | undefined): Placement {
 
 // Row heights (in grid units) for each widget kind. The grid uses a FINE row
 // unit so the stat band and charts get proportional heights from one uniform
-// rowHeight. The operator feedback (issue #73 iteration) is that several stat
-// cards (carbon, vs-last-year, budget) were CLIPPED at the old 2-row default:
-//   • the carbon card has a title + a big number + a THREE-fact sub line
-//     ("≈ N gal gas · N tree-yrs · estimate") that wraps,
-//   • vs-last-year shows two fuel deltas plus a sub line,
-//   • budget has a title + headline + a progress BAR + a status sub line.
-// At the fit rowHeight a single grid row is ~36–44px, so 2 rows (~80px) clipped
-// the bar/wrapped sub lines. We bump a stat card to STAT_ROWS = 3 (~120px) so the
-// tallest card (budget: ~16px title + ~30px stat + ~10px bar + ~16px sub +
-// padding ≈ 96px) fits with headroom, and widen the per-widget default to w=3 so
-// the three-fact carbon sub line and the two-fuel YoY row don't wrap awkwardly.
-// A chart stays ~7 units (a comfortably tall plot).
-const STAT_ROWS = 3;
+// rowHeight.
+//
+// COMPACT STAT CARDS (compact-stat-cards iteration). The operator's ask: the
+// default pinned strip took ~half the screen (two card-rows of tall cards); it
+// should be a SINGLE compact row. Two changes deliver that — (1) the stat card's
+// minW is now 1, so all 8 cards lay out in ONE row of the 12-col strip (was minW=2
+// → 8 cards forced onto two card-rows), and (2) the card body is trimmed to just
+// the brief title + the headline value (the old sub/detail line moved into the ⓘ
+// tooltip), so a card needs only ~2 grid rows of height. We drop STAT_ROWS 3 → 2:
+// a simple/yoy card (title + headline = 64px) fits in 2 strip rows (2*28 + 8 =
+// 64px); the budget card reserves its progress bar (76px → minH=3, via cardFit), so
+// withMins lifts just that one tile to 3 rows. The strip band is therefore ~one
+// compact row (~106px, budget-driven, at STRIP_ROW_HEIGHT=30) instead of the old
+// ~208px two-row block. A chart stays ~7 units (a comfortably tall plot).
+export const STAT_ROWS = 2;
 // Exported so WidgetLayout can pass it as computePageFit's `rowQuantum` — keeping
 // each fit page a whole number of CHART rows so the 2×2 aligns to page boundaries
 // (no partial chart row straddling a page → no wasted empty band).
@@ -273,7 +275,12 @@ function band(
 //     short last row (2 cards) spreads to w=6 each rather than leaving 8 cols empty.
 //   • Each tile is stamped with (and never dropped below) its widget's min.
 // PURE.
-function statBand(ids: string[], cols: number, mins?: WidgetMins): { items: Placement[]; nextY: number } {
+function statBand(
+  ids: string[],
+  cols: number,
+  mins?: WidgetMins,
+  wideIds?: ReadonlySet<string>
+): { items: Placement[]; nextY: number } {
   const n = ids.length;
   if (n === 0) return { items: [], nextY: 0 };
   // The widest min among the cards bounds how many fit in one row at ≥ minW each.
@@ -287,10 +294,29 @@ function statBand(ids: string[], cols: number, mins?: WidgetMins): { items: Plac
     const row = ids.slice(start, start + perRow);
     const rowCount = row.length;
     const baseW = Math.floor(cols / rowCount);
-    const extra = cols % rowCount; // the first `extra` cards in this row get +1 col
+    const extra = cols % rowCount; // this many cards in the row get +1 col
+    // WHICH cards get the extra column: by default the first `extra` (row order),
+    // but when `wideIds` is supplied (the strip's wide-content cards: yoy / budget /
+    // the rate cards) the extra goes to THOSE first, so the cards whose headline is
+    // widest get the +1 col and don't truncate their number. Any leftover extra
+    // (more `extra` than wide cards in this row) falls back to the first non-wide
+    // cards in order, so the row still sums to exactly `cols`. PURE.
+    const getsExtra = new Set<number>();
+    if (wideIds && wideIds.size > 0) {
+      const wideCols = row.map((i, c) => (wideIds.has(i) ? c : -1)).filter((c) => c >= 0);
+      for (const c of wideCols) {
+        if (getsExtra.size >= extra) break;
+        getsExtra.add(c);
+      }
+      for (let c = 0; c < rowCount && getsExtra.size < extra; c++) {
+        if (!getsExtra.has(c)) getsExtra.add(c);
+      }
+    } else {
+      for (let c = 0; c < extra; c++) getsExtra.add(c);
+    }
     let x = 0;
     row.forEach((i, col) => {
-      const w = baseW + (col < extra ? 1 : 0);
+      const w = baseW + (getsExtra.has(col) ? 1 : 0);
       items.push(withMins({ i, x, y, w, h: STAT_ROWS }, mins));
       x += w;
     });
@@ -298,6 +324,20 @@ function statBand(ids: string[], cols: number, mins?: WidgetMins): { items: Plac
   }
   return { items, nextY: y };
 }
+
+// The stat cards whose headline VALUE is intrinsically wide ("$0.220/kWh",
+// "$1.60/therm", the two-fuel YoY "Elec −19% Gas −3%", the budget "~$3,003 /
+// $2,800"). In the single-row 12-col strip the 12/8 split makes four cards w=1
+// (~105px) and four w=2; giving the +1 col to THESE wide cards (instead of the
+// first-in-order) keeps their number from truncating at w=1. The short-value cards
+// (latest bill, lifetime, est-next, carbon) sit happily at w=1. Keyed by widget
+// type so the strip generator can mark them; presentation-only (no number logic).
+export const WIDE_STAT_TYPES: ReadonlySet<string> = new Set([
+  'stat:elecRate',
+  'stat:gasRate',
+  'stat:yoy',
+  'stat:budget',
+]);
 
 // Generate the PINNED STRIP's own placements (issue #73 iteration). The strip is
 // an independent 12-col RGL grid of the stat cards, pinned above every page. Its
@@ -311,7 +351,7 @@ function statBand(ids: string[], cols: number, mins?: WidgetMins): { items: Plac
 // is wrapped to respect minW and each tile is stamped with its min. PURE —
 // unit-tested.
 export function generateStripPlacements(statIds: string[], mins?: WidgetMins): Placement[] {
-  return statBand(statIds, STRIP_COLS, mins).items;
+  return statBand(statIds, STRIP_COLS, mins, WIDE_STAT_TYPES).items;
 }
 
 // Generate the lg (12-col) cockpit: stat band on top, then a 2×2 chart GRID
@@ -343,7 +383,7 @@ function generateLg(input: DefaultLayoutInput): Placement[] {
   // fix). Each card gets floor(cols/perRow), the first (cols % perRow) get +1, so
   // a row's widths SUM TO `cols` (fills edge to edge); surplus cards wrap to a
   // second STAT_ROWS-tall row. 8 cards × minW=2 on 12 cols → 6 per row → 6 + 2.
-  const stat = statBand(input.statIds, cols, mins);
+  const stat = statBand(input.statIds, cols, mins, WIDE_STAT_TYPES);
   out.push(...stat.items);
   const afterStats = stat.nextY;
 

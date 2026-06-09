@@ -42,19 +42,20 @@ export interface StatTooltip {
   accent: 'amber' | 'emerald';
 }
 
-// The shape the shared <StatCard> renders for a SIMPLE card. `value`/`sub` are
-// React nodes because a couple of cards interpolate a smaller-unit <span> (e.g.
-// "/kWh", " kg CO₂e") — exactly the markup the old JSX produced, kept byte-for-
-// byte. A pure selector building these uses only React.createElement-free JSX in
-// the renderer; here it returns plain data + the optional tooltip.
+// The shape the shared <StatCard> renders for a SIMPLE card. The compact card body
+// is just the (brief) title + the headline value — the old sub/detail line moved
+// into the ⓘ tooltip (the compact-stat-cards iteration), so a card needs only its
+// title + headline of height. Every simple card now carries a `tooltip` (no info is
+// lost — it's relocated). `value` is either a plain string or { lead, unit } when
+// the card shows a smaller trailing unit span (e.g. "/kWh", " kg") — the renderer
+// applies the `text-sm text-slate-500` unit styling.
 export interface StatCardModel {
   title: string;
   // The main stat. Either a plain string, or { lead, unit } when the card shows
   // a smaller trailing unit span (rate + carbon cards) — the renderer applies
-  // the `text-sm text-slate-500` unit styling so the markup matches today.
+  // the `text-sm text-slate-500` unit styling.
   value: string | { lead: string; unit: string };
-  sub: string;
-  tooltip?: StatTooltip;
+  tooltip: StatTooltip;
 }
 
 // vs-last-year selector output (issue #47). Pure: the two per-fuel normalized
@@ -137,73 +138,84 @@ export const STAT_SPECS: StatSpec[] = [
     id: 'latestBill',
     kind: 'simple',
     isVisible: () => true,
+    // Compact card: title + the amount only; the statement date moved to the ⓘ.
     select: ({ ov, currencyDecimals: dp }) => ({
       title: 'Latest bill',
       value: usd(ov?.latestBill?.totalDueAmount, dp),
-      sub: dateLabel(ov?.latestBill?.statementDate),
+      tooltip: { text: `Amount due on your latest statement, dated ${dateLabel(ov?.latestBill?.statementDate)}.`, accent: 'amber' },
     }),
   },
   {
     id: 'lifetimeSpend',
     kind: 'simple',
     isVisible: () => true,
+    // "across N bills" moved to the ⓘ.
     select: ({ ov }) => ({
-      title: 'Lifetime spend',
+      title: 'Lifetime',
       value: usd(ov?.lifetimeSpend, 0),
-      sub: `across ${num(ov?.billCount)} bills`,
+      tooltip: { text: `Total spent across all ${num(ov?.billCount)} bills on record.`, accent: 'amber' },
     }),
   },
   {
     id: 'elecRate',
     kind: 'simple',
     isVisible: () => true,
+    // The "full price, last 12 mo · supply part $…" detail moved to the ⓘ.
     select: ({ elecAllIn, lastRow }) => ({
-      title: 'Electric rate',
+      title: 'Elec rate',
       value: { lead: rate(elecAllIn), unit: '/kWh' },
-      sub: `full price, last 12 mo · supply part ${rate(lastRow?.elecRateSupply)}`,
+      tooltip: {
+        text: `Full all-in electricity price (supply + delivery) averaged over the last 12 months. The supply part of your latest bill is ${rate(lastRow?.elecRateSupply)}/kWh.`,
+        accent: 'amber',
+      },
     }),
   },
   {
     id: 'gasRate',
     kind: 'simple',
     isVisible: () => true,
+    // The "full price, last 12 mo · supply part $…" detail moved to the ⓘ.
     select: ({ gasAllIn, lastRow }) => ({
       title: 'Gas rate',
       value: { lead: rate(gasAllIn, 2), unit: '/therm' },
-      sub: `full price, last 12 mo · supply part ${rate(lastRow?.gasRateSupply, 2)}`,
+      tooltip: {
+        text: `Full all-in gas price (supply + delivery) averaged over the last 12 months. The supply part of your latest bill is ${rate(lastRow?.gasRateSupply, 2)}/therm.`,
+        accent: 'amber',
+      },
     }),
   },
   {
-    // Compact estimate card (issue #38): "Est. next bill", "~$X" and the short
-    // range; the verbose basis + disclaimer live behind the ⓘ tooltip.
+    // Compact estimate card (issue #38): "Est. next", "~$X"; the low–high range +
+    // the verbose basis + disclaimer all live behind the ⓘ tooltip.
     id: 'nextBillEstimate',
     kind: 'simple',
     isVisible: ({ ov }) => !!ov?.nextBillEstimate,
     select: ({ ov, currencyDecimals: dp }) => {
       const e = ov!.nextBillEstimate!;
       return {
-        title: 'Est. next bill',
+        title: 'Est. next',
         value: `~${usd(e.point, dp)}`,
-        sub: `${usd(e.low, dp)}–${usd(e.high, dp)}`,
-        tooltip: { text: estimateTooltip(e.basis), accent: 'amber' },
+        tooltip: {
+          text: `Likely range ${usd(e.low, dp)}–${usd(e.high, dp)}. ${estimateTooltip(e.basis)}`,
+          accent: 'amber',
+        },
       };
     },
   },
   {
-    // Carbon-footprint estimate (issue #49): trailing-12 combined CO2e in kg,
-    // with a friendly equivalence and the location-based-ESTIMATE caveat behind
-    // the ⓘ tooltip. Never a cost number.
+    // Carbon-footprint estimate (issue #49): trailing-12 combined CO2e in kg. The
+    // friendly equivalences (gal gas / tree-yrs) + the location-based-ESTIMATE
+    // caveat live behind the ⓘ tooltip. Never a cost number.
     id: 'emissions',
     kind: 'simple',
     isVisible: ({ ov }) => !!ov?.emissions,
     select: ({ ov }) => {
       const e = ov!.emissions!;
       return {
-        title: 'Carbon (12 mo)',
-        value: { lead: `~${num(Math.round(e.totalKg))}`, unit: ' kg CO₂e' },
-        sub: `≈ ${num(Math.round(e.gallonsGasoline))} gal gas · ${num(Math.round(e.treeYears))} tree-yrs · estimate`,
+        title: 'Carbon',
+        value: { lead: `~${num(Math.round(e.totalKg))}`, unit: ' kg' },
         tooltip: {
-          text: "An estimate of the carbon emissions from your energy use, based on your electricity and gas and a regional grid average. It reflects the typical mix of power in your area, not your specific plan. You can set your own electricity factor in Settings if you're on a green plan.",
+          text: `~${num(Math.round(e.totalKg))} kg CO₂e over the last 12 months — roughly ${num(Math.round(e.gallonsGasoline))} gal of gasoline, or ${num(Math.round(e.treeYears))} tree-years to offset. An estimate of the carbon emissions from your energy use, based on your electricity and gas and a regional grid average. It reflects the typical mix of power in your area, not your specific plan. You can set your own electricity factor in Settings if you're on a green plan.`,
           accent: 'emerald',
         },
       };
@@ -262,7 +274,7 @@ export const STAT_SPECS: StatSpec[] = [
         spentPct,
         remPct,
         targetPct,
-        tooltip: `You've spent ${usd(spent, 0)} of your ${usd(target, 0)} target for ${fromY} so far, and we expect about ${usd(projected, 0)} by year's end (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). "Spent" adds up what you were actually charged for energy on this year's bills; the rest of the year is estimated. On-track vs. over budget accounts for winter naturally costing more. Click for the month-by-month breakdown, or set your target in Settings. Not a real charge.`,
+        tooltip: `Projected ${usd(projected, 0)} vs your ${usd(target, 0)} target for ${fromY} — ${statusLabel}. You've spent ${usd(spent, 0)} so far, and we expect about ${usd(projected, 0)} by year's end (range ${usd(projectedLow, 0)}–${usd(projectedHigh, 0)}). "Spent" adds up what you were actually charged for energy on this year's bills; the rest of the year is estimated. On-track vs. over budget accounts for winter naturally costing more. Click for the month-by-month breakdown, or set your target in Settings. Not a real charge.`,
       };
     },
   },

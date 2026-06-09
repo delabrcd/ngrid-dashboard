@@ -26,17 +26,20 @@ import { BillsPanel, type BillsPanelData } from '@/components/widgets/BillsPanel
 import type { ChartConfig } from '@/lib/prefs';
 import type { ToolsTab } from '@/components/ToolsModal';
 import { essentialHeightPx, pxToMinRows, type StatCardKind } from '@/lib/widgets/cardFit';
+import { STAT_ROWS } from '@/lib/layoutEngine';
 
 // Reference rowHeight (px) + RGL margin used ONLY to translate a widget's
-// essential CONTENT height (from cardFit.ts) into a grid-row `minH`. The fit
-// breakpoint's runtime rowHeight is computed (computePageFit) and varies with the
-// viewport; `minH` is a static placement bound, so we derive it against the
-// SMALLEST realistic fit row (MIN_ROW_HEIGHT, 24px) — the conservative floor — so
-// the row count covers the essential content even on a short viewport where the
-// rowHeight bottoms out (a card can NEVER be dragged below the height its title +
-// headline + bar need, at any fit row). Mirrors MARGIN/MIN_ROW_HEIGHT in
-// layoutEngine/WidgetLayout.
-const REF_ROW_HEIGHT = 24; // = MIN_ROW_HEIGHT (the fit rowHeight floor)
+// essential CONTENT height (from cardFit.ts) into a grid-row `minH`. Stat cards'
+// DEFAULT home is the pinned strip, which renders at the fixed STRIP_ROW_HEIGHT
+// (30px) — so we derive `minH` against that row height, the height the card
+// actually occupies where it lives by default. At 30px a slim simple/yoy card
+// (border + padding + title + headline = 66px) needs minH=2 and the budget card
+// (which also reserves its progress bar = 78px) needs minH=3 — the compact single-row strip (the
+// compact-stat-cards iteration: brief title + headline only, detail moved to the ⓘ
+// tooltip). `overflow-hidden` on the card is the hard backstop if a tile is ever
+// dragged shorter (e.g. onto the paged grid, whose fit row can bottom out at 24px).
+// Mirrors MARGIN/STRIP_ROW_HEIGHT in WidgetLayout.
+const REF_ROW_HEIGHT = 30; // = STRIP_ROW_HEIGHT (the stat cards' default home)
 const REF_MARGIN = 8;
 
 // The grid `minH` for a stat card of the given kind: the row count whose pixels
@@ -157,18 +160,18 @@ function statWidget(spec: StatSpec): WidgetDef {
     // Stat widgets read the `ov` bag off the host directly (Phase A); routing
     // them through the dataset layer is a later, opt-in change. No deps yet.
     dataDeps: [],
-    // A KPI card (issue #73 iteration: fix the clipped carbon / vs-last-year /
-    // budget cards). 3 of 12 cols wide so the three-fact carbon sub line
-    // ("≈ N gal gas · N tree-yrs · estimate") and the two-fuel YoY row fit on one
-    // line, and 3 rows tall (= STAT_ROWS, ~120px at the fit rowHeight) so the
-    // budget card's title + headline + progress bar + status line aren't clipped.
-    // minH is DERIVED from the card's essential content (cardFit.ts) — the budget
-    // card reserves its progress bar, so it gets a taller floor than a simple/yoy
-    // card. minW=2 keeps the sub line legible.
+    // A COMPACT KPI card (compact-stat-cards iteration). The card body is now just
+    // the (brief) title + the headline value (+ the budget bar) — the sub/detail
+    // line moved into the ⓘ tooltip — so the card is short and narrow. minW=1 lets
+    // all 8 stat cards lay out in a SINGLE row of the 12-col strip (the operator's
+    // ask: one row, not two). minH is DERIVED from the card's essential content
+    // (cardFit.ts) at the strip's row height — simple/yoy → 2 rows, the budget card
+    // (which reserves its progress bar) → 3. `defaultSize.w`/`h` are the add-one-
+    // widget fallback; the default strip widths come from the layout generator.
     defaultSize: {
-      w: 3,
-      h: 3,
-      minW: 2,
+      w: 2,
+      h: STAT_ROWS,
+      minW: 1,
       minH: statMinH(spec.kind === 'budget' ? 'budget' : 'simple'),
     },
     render: (host) => {

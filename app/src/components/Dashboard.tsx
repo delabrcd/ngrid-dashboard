@@ -39,6 +39,7 @@ import { WidgetPalette, type PaletteGroup } from './WidgetPalette';
 import {
   COLS,
   FIT_BREAKPOINT,
+  STAT_ROWS,
   STRIP_COLS,
   findFreeSlot,
   generateDefaultPlacements,
@@ -705,13 +706,13 @@ export function Dashboard() {
 
 // The size a widget gets when PINNED to the top bar (issue #73 polish #4). The bar
 // is a thin band (STRIP_ROW_HEIGHT ≈ 28px/row, content-sized — not viewport-tall),
-// so a stat keeps its compact band geometry (≈3 rows ≈ 100px, today's strip card),
+// so a stat keeps its compact band geometry (STAT_ROWS rows ≈ the strip card),
 // while a CHART or PANEL — whose page default is tall (h=7/14) — is clamped to a
 // compact bar tile so pinning one doesn't make the bar swallow the viewport. The
-// user can still drag-resize it within the bar afterward. Mirrors STAT_ROWS=3 and
-// the half-width chart from layoutEngine without importing the private constant.
+// user can still drag-resize it within the bar afterward. Uses STAT_ROWS from the
+// layout engine so the pinned height tracks the compact strip-card height.
 function stripSizeFor(type: string, defaultSize: { w: number; h: number }): { w: number; h: number } {
-  if (type.startsWith('stat:')) return { w: defaultSize.w, h: 3 };
-  // Charts / panels: a quarter-width, ~3-row bar tile (≈100px tall) by default.
-  return { w: 3, h: 3 };
+  if (type.startsWith('stat:')) return { w: defaultSize.w, h: STAT_ROWS };
+  // Charts / panels: a quarter-width, compact STAT_ROWS-tall bar tile by default.
+  return { w: 3, h: STAT_ROWS };
 }

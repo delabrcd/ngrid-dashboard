@@ -116,9 +116,12 @@ const FALLBACK_ROW_HEIGHT = 40;
 
 // The pinned strip's row height (px). The strip is NOT viewport-filling — it's
 // sized to its cards' content (its height is measured and SUBTRACTED from availH),
-// so it uses a fixed readable row, NOT the fit-derived one. A STAT_ROWS-tall card
-// (3 rows) at this height ≈ the old flex strip's ~100px card: 3*28 + 2*8 = 100.
-const STRIP_ROW_HEIGHT = 28;
+// so it uses a fixed readable row, NOT the fit-derived one. A compact simple card
+// is STAT_ROWS=2 rows → 2*30 + 8 = 68px (covers its 66px essential border-box with a
+// hair of slack); the budget card reserves a progress bar (minH=3) → 3*30 + 16 =
+// 106px, which drives the single-row strip band height. Mirrors REF_ROW_HEIGHT in
+// registry.tsx, where the same row height derives each card's grid `minH`.
+const STRIP_ROW_HEIGHT = 30;
 
 export interface WidgetLayoutProps {
   // The widget ids to place, by category, IN ORDER — the host computes these
