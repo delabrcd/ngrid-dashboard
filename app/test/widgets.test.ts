@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CHART_SPECS } from '../src/lib/chartSpec';
 import type { Overview } from '../src/components/useDashboardData';
-import { WIDGETS, BILLS_PANEL_TYPE, chartWidgetType, statWidgetType, getWidget } from '../src/lib/widgets/registry';
+import { WIDGETS, BILLS_PANEL_TYPE, SPACER_PREFIX, chartWidgetType, statWidgetType, getWidget, isSpacerId, widgetMins } from '../src/lib/widgets/registry';
 import type { MonthRow } from '../src/lib/chartSpec';
 import {
   STAT_IDS,
@@ -72,13 +72,15 @@ describe('widget registry completeness', () => {
     }
   });
 
-  it('has exactly chart+stat+panel entries and no namespace collision', () => {
-    // 7 charts + 8 stats + 1 panel (the bills rail, Phase E #73) = 16 widgets;
-    // the chart:/stat:/panel: prefixes keep them distinct.
+  it('has exactly chart+stat+panel+spacer entries and no namespace collision', () => {
+    // 7 charts + 8 stats + 1 panel (the bills rail, Phase E #73) + 1 spacer prototype
+    // (CHANGE 2) = 17 registry entries; the chart:/stat:/panel:/spacer prefixes keep
+    // them distinct. (The spacer is stored under its bare prefix; concrete
+    // `spacer:<n>` instances resolve to it in getWidget — they're not extra entries.)
     expect(CHART_SPECS.length).toBe(7);
     expect(STAT_IDS.length).toBe(8);
-    expect(Object.keys(WIDGETS).length).toBe(CHART_SPECS.length + STAT_IDS.length + 1);
-    expect(new Set(Object.keys(WIDGETS)).size).toBe(16);
+    expect(Object.keys(WIDGETS).length).toBe(CHART_SPECS.length + STAT_IDS.length + 2);
+    expect(new Set(Object.keys(WIDGETS)).size).toBe(17);
   });
 
   it('registers the bills panel (Phase E #73) as a placeable panel widget', () => {
@@ -92,6 +94,30 @@ describe('widget registry completeness', () => {
   it('throws on an unknown widget type (a missing registration is a bug)', () => {
     expect(() => getWidget('chart:does-not-exist')).toThrow();
     expect(() => getWidget('stat:does-not-exist')).toThrow();
+  });
+
+  it('resolves any spacer:<n> instance to the one spacer prototype (CHANGE 2)', () => {
+    const proto = getWidget(SPACER_PREFIX);
+    expect(proto.category).toBe('tool');
+    expect(proto.title).toBe('Spacer');
+    // Multi-instance: every concrete spacer id resolves to the SAME prototype def.
+    expect(getWidget('spacer:1')).toBe(proto);
+    expect(getWidget('spacer:2')).toBe(proto);
+    expect(getWidget('spacer:42')).toBe(proto);
+    // isSpacerId distinguishes a concrete instance from the bare prefix / other ids.
+    expect(isSpacerId('spacer:1')).toBe(true);
+    expect(isSpacerId('spacer:99')).toBe(true);
+    expect(isSpacerId('spacer')).toBe(false); // the bare prototype key, not an instance
+    expect(isSpacerId('stat:budget')).toBe(false);
+    // The prototype respects the min-size floor (minW/minH ≥ 1).
+    expect(proto.defaultSize.minW).toBeGreaterThanOrEqual(1);
+    expect(proto.defaultSize.minH).toBeGreaterThanOrEqual(1);
+  });
+
+  it('widgetMins resolves a placed spacer instance to its prototype floor', () => {
+    const mins = widgetMins(['spacer:1', 'spacer:7']);
+    expect(mins['spacer:1']).toEqual({ minW: 1, minH: 1 });
+    expect(mins['spacer:7']).toEqual({ minW: 1, minH: 1 });
   });
 
   it('keeps the 4 fixed cards first, then the optional cards, in render order', () => {

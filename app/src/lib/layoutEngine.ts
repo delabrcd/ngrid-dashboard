@@ -91,9 +91,14 @@ export type Placements = Partial<Record<Breakpoint, Placement[]>> & {
 // with a real breakpoint id ('lg'/'md'/'sm'/'xs').
 export const STRIP_KEY = '__strip' as const;
 
-// The pinned strip is a 12-col band (matching the lg grid's column count) so its
-// 8-across default lands cleanly. Exported for the component's strip RGL.
-export const STRIP_COLS = 12;
+// The pinned strip is its OWN grid, separate from the 12-col page grid. We use a
+// FINE 24-col band (CHANGE 1, the even-strip iteration) so the 8 default stat cards
+// tile EVENLY: 24 / 8 = 3 cols each, all equal width, summing to 24 with no
+// remainder — the operator's "evenly spaced" ask. (At 12 cols, 12 % 8 = 4 forced a
+// mixed 4×w=2 + 4×w=1 distribution, which read as unbalanced.) 24 is divisible by
+// the common card counts (8→3, 6→4, 4→6, 3→8, 2→12), so the strip stays even as
+// cards are added/removed. Exported for the component's strip RGL.
+export const STRIP_COLS = 24;
 
 // Read the strip placements out of a (possibly absent) blob — never the
 // per-breakpoint paths, which must ignore the reserved key. PURE.
@@ -326,39 +331,56 @@ function statBand(
   return { items, nextY: y };
 }
 
-// The stat cards that should claim the strip's four `+1` columns (the cards-narrow
-// rebalance, compact-stat-cards iteration). The single-row 12-col strip across 8
-// cards is baseW=1 with `12 % 8 = 4` extra columns, so EXACTLY four cards get +1
-// (w=2) and the other four stay w=1. We hand the +1 to the cards whose headline is
-// next-widest so a uniform 20px headline never truncates:
-//   • yoy ("Elec −19% Gas −3%") — genuinely the widest, two fuels + two deltas.
-//   • the three widest dollar headlines: lifetime ("$12,346"), latest bill
-//     ("$192.50"), est-next ("~$192.24").
-// The rate cards were TRIMMED to 2-dp ($0.22/kWh, supply in the ⓘ) and the budget
-// card hides its " / target" tail when narrow (the bar + ⓘ carry the target), so
-// BOTH now fit w=1 — they're deliberately NOT here (the operator's "rates/budget are
-// wider than necessary"). Carbon ("~1,235 kg") also fits w=1. Keyed by widget type
-// so the strip generator marks them; presentation-only (no number logic).
-export const WIDE_STAT_TYPES: ReadonlySet<string> = new Set([
-  'stat:yoy',
-  'stat:lifetimeSpend',
-  'stat:latestBill',
-  'stat:nextBillEstimate',
-]);
+// (RETIRED, CHANGE 1) `WIDE_STAT_TYPES` used to hand the strip's leftover `+1`
+// columns to the widest-content cards, producing the mixed 4×w=2 + 4×w=1 strip the
+// operator found "unbalanced". The even-strip iteration drops that distribution: the
+// strip is now a FINE 24-col grid where 24 / 8 divides evenly, so every card gets
+// the SAME width (no remainder to hand out). The set is kept (empty) only because a
+// couple of tests still import it as a name; it no longer affects any placement and
+// the lg-cockpit stat band (statBand, used only when the strip is toggled OFF) just
+// gets an even/edge-to-edge fill from its own remainder logic.
+export const WIDE_STAT_TYPES: ReadonlySet<string> = new Set<string>();
 
-// Generate the PINNED STRIP's own placements (issue #73 iteration). The strip is
-// an independent 12-col RGL grid of the stat cards, pinned above every page. Its
-// default is today's full-width 8-across band — reusing statBand so it's byte-
-// identical to the stat row the lg default cockpit lays out (widths summing to 12,
-// each STAT_ROWS tall), wrapping to a SECOND row when more cards than fit at ≥
-// minW each (issue #73 fix: 8 cards × minW=2 → max 6 per row → 6 + 2). Each card
-// carries the same content-fit min bounds the registry's defaultSize uses so it
-// can't be dragged (or DEFAULTED) uselessly small. The min lookup is passed in by
-// the component (this module stays pure + registry-free); when supplied, the strip
-// is wrapped to respect minW and each tile is stamped with its min. PURE —
-// unit-tested.
+// Lay a list of ids as an EVENLY-spaced single band that fills `cols` exactly: each
+// card gets floor(cols / n) columns, ALL EQUAL, and any remainder (cols % n) is left
+// as a small trailing gap rather than handed to a subset (which would make some
+// cards wider — the "unbalanced" look CHANGE 1 fixes). When `cols` is divisible by
+// `n` (the default 24/8 strip) there is NO remainder, so the row fills edge to edge
+// with every card identical. Cards are clamped UP to the widest minW (so none falls
+// below its floor) — if that forces unequal totals the band still keeps every card
+// the same width (the common, divisible case stays perfectly even). Each tile is
+// stamped with its registry min. PURE.
+function evenBand(
+  ids: string[],
+  cols: number,
+  mins?: WidgetMins
+): { items: Placement[]; nextY: number } {
+  const n = ids.length;
+  if (n === 0) return { items: [], nextY: 0 };
+  // The widest min bounds the smallest equal width we may use (no card below minW).
+  const maxMinW = Math.max(1, ...ids.map((i) => minWOf(i, mins)));
+  // The largest EQUAL width that fits all n cards in one row at ≥ minW each. If the
+  // cards don't all fit one even row at the floor (n*maxMinW > cols), fall back to
+  // the floor width (cards may then exceed `cols` slightly — RGL wraps them, the
+  // documented "fewest even rows" fallback), but EVERY card stays the same width.
+  const fitW = Math.floor(cols / n);
+  const cellW = Math.max(maxMinW, fitW);
+  const items: Placement[] = ids.map((i, idx) =>
+    withMins({ i, x: idx * cellW, y: 0, w: cellW, h: STAT_ROWS }, mins)
+  );
+  return { items, nextY: STAT_ROWS };
+}
+
+// Generate the PINNED STRIP's own placements (issue #73; CHANGE 1 — even strip).
+// The strip is an independent 24-col RGL grid of the stat cards, pinned above every
+// page. Its default is a SINGLE row of EQUAL-WIDTH cards (evenBand): 8 cards on the
+// 24-col band → 3 cols each, all identical, summing to 24 edge to edge — the
+// operator's "evenly spaced" ask (replacing the old mixed w=1/w=2 distribution).
+// Each card carries the registry's content-fit min bounds so it can't be dragged (or
+// DEFAULTED) below its floor. The min lookup is passed in by the component (this
+// module stays pure + registry-free). PURE — unit-tested.
 export function generateStripPlacements(statIds: string[], mins?: WidgetMins): Placement[] {
-  return statBand(statIds, STRIP_COLS, mins, WIDE_STAT_TYPES).items;
+  return evenBand(statIds, STRIP_COLS, mins).items;
 }
 
 // Generate the lg (12-col) cockpit: stat band on top, then a 2×2 chart GRID

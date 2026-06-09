@@ -28,8 +28,10 @@ import { dateLabel, relativeFromNow } from '@/lib/format';
 import { STAT_SPECS, type StatData } from '@/lib/widgets/statSpec';
 import {
   BILLS_PANEL_TYPE,
+  SPACER_PREFIX,
   chartWidgetType,
   getWidget,
+  isSpacerId,
   statWidgetType,
   widgetMins,
   type WidgetHost,
@@ -164,6 +166,12 @@ export function Dashboard() {
   // irrelevant (ConfigurableChart uses the fill path). This is the runtime no-
   // scroll fit replacing FILL_BODY_CLASSES: the cell height comes from RGL's
   // computed rowHeight, and the chart fills it at 100%.
+  // Customize mode (Phase E). A header Customize/Done toggle; only meaningful at
+  // ≥xl in fit (the grid is interactive everywhere, but the palette + the cockpit
+  // shine on desktop). Off by default — the default view is the static dashboard.
+  // Declared before widgetHost so the host can pass it to the spacer renderer.
+  const [customizing, setCustomizing] = useState(false);
+
   const widgetHost: WidgetHost = {
     resolveDataset,
     specFor,
@@ -175,6 +183,9 @@ export function Dashboard() {
     openTools,
     flickRateMode,
     billsData: { rangedBills, currencyDecimals: dp, csvScope, pdfScope },
+    // The spacer widget reads this to switch between its dashed-outline editable form
+    // and its invisible space-holding form (CHANGE 2).
+    customizing,
   };
 
   // ---- The placed-widget set (Phase E, #73) ----
@@ -197,6 +208,19 @@ export function Dashboard() {
     : [];
   const availableStats = visibleStats.map((s) => statWidgetType(s.id));
   const availablePanels = [BILLS_PANEL_TYPE];
+
+  // SPACER instances (CHANGE 2) currently placed: read straight off the saved blob
+  // (the lg page grid + the pinned strip), since spacers aren't a Phase-D-tracked
+  // category — they exist only as placements. De-duped, in a stable order, so they
+  // flow into WidgetLayout's placed universe and survive the merge repair.
+  const spacerIds = useMemo(() => {
+    const ids = new Set<string>();
+    const lg = layout?.layouts?.[FIT_BREAKPOINT];
+    if (Array.isArray(lg)) for (const p of lg) if (isSpacerId(p.i)) ids.add(p.i);
+    const strip = readStrip(layout?.layouts ?? undefined);
+    if (Array.isArray(strip)) for (const p of strip) if (isSpacerId(p.i)) ids.add(p.i);
+    return [...ids];
+  }, [layout]);
 
   // The set of widget types the SAVED layout places — the lg page grid PLUS the
   // pinned top bar (__strip). null (vs an empty set) means "no layout saved yet" →
@@ -233,10 +257,6 @@ export function Dashboard() {
   const chartIds = availableCharts;
   const panelIds = availablePanels.filter(isPlaced);
 
-  // Customize mode (Phase E). A header Customize/Done toggle; only meaningful at
-  // ≥xl in fit (the grid is interactive everywhere, but the palette + the cockpit
-  // shine on desktop). Off by default — the default view is the static dashboard.
-  const [customizing, setCustomizing] = useState(false);
   const fit = prefs.density === 'fit';
 
   // Add/remove a widget. Both edit the SAVED placements: removing strips the type
@@ -295,12 +315,12 @@ export function Dashboard() {
     if (lg.some((p) => p.i === type)) return; // already placed
     const next: Record<string, Placement[]> = { ...(cur as Record<string, Placement[]>) };
     // Drop at the widget's registry default size on the FIRST free slot of the lg
-    // grid. Under FREE PLACEMENT (compactType=null + preventCollision, CHANGE 2)
-    // RGL no longer compacts a tile dropped at (0,0) into an empty cell, and would
-    // REJECT a drop that overlaps an existing tile — so we must place the new tile
-    // on an empty patch ourselves (findFreeSlot scans reading-order for the first
-    // non-overlapping cell, always finding one below the layout at worst). Other
-    // breakpoints get it appended by WidgetLayout's merge against fresh defaults.
+    // grid. Under DISPLACEMENT+COMPACTION (CHANGE 2) RGL would otherwise drop a new
+    // tile at (0,0) and shove the existing tiles down; landing it on an empty patch
+    // (findFreeSlot scans reading-order for the first non-overlapping cell, always
+    // finding one below the layout at worst) keeps the add tidy, and vertical
+    // compaction then packs it into place. Other breakpoints get it appended by
+    // WidgetLayout's merge against fresh defaults.
     const { defaultSize } = getWidget(type);
     const slot = findFreeSlot(lg, defaultSize, COLS[FIT_BREAKPOINT]);
     next[FIT_BREAKPOINT] = [
@@ -308,6 +328,39 @@ export function Dashboard() {
       ...lg,
     ];
     setPlacements(next);
+  };
+
+  // Add a NEW spacer instance (CHANGE 2). Spacers are multi-instance (`spacer:1`,
+  // `spacer:2`, …) and always addable, so this mints a FRESH id (one past the
+  // highest existing spacer number) and drops it at a free lg slot. If no layout is
+  // saved yet, we first materialize the current default (so the new spacer sticks as
+  // an explicit placement). It persists as a normal placement and survives reload.
+  const addSpacer = () => {
+    // The next free spacer number: max existing + 1 (1-based), so removing then
+    // re-adding doesn't collide with a surviving instance.
+    const nums = spacerIds.map((id) => Number(id.slice(SPACER_PREFIX.length + 1))).filter((n) => Number.isFinite(n));
+    const nextId = `${SPACER_PREFIX}:${(nums.length ? Math.max(...nums) : 0) + 1}`;
+    const { defaultSize } = getWidget(nextId);
+    const lg = Array.isArray(layout?.layouts?.[FIT_BREAKPOINT])
+      ? layout!.layouts![FIT_BREAKPOINT]!
+      : buildCurrentLgPlacements();
+    const slot = findFreeSlot(lg, defaultSize, COLS[FIT_BREAKPOINT]);
+    const newTile: Placement = {
+      i: nextId,
+      x: slot.x,
+      y: slot.y,
+      w: defaultSize.w,
+      h: defaultSize.h,
+      minW: defaultSize.minW,
+      minH: defaultSize.minH,
+    };
+    // Preserve any other saved breakpoints + the strip; only the lg page grid gains
+    // the new spacer (other breakpoints pick it up via WidgetLayout's merge defaults).
+    const cur = layout?.layouts;
+    const next: Record<string, Placement[]> = cur ? { ...(cur as Record<string, Placement[]>) } : {};
+    next[FIT_BREAKPOINT] = [newTile, ...lg];
+    const strip = readStrip(cur ?? undefined);
+    setPlacements(strip ? withStrip(next as Record<Breakpoint, Placement[]>, strip) : next);
   };
   // The current default lg placements for the FULL available set — used to
   // materialize a saved blob the first time the user removes a widget from the
@@ -633,7 +686,7 @@ export function Dashboard() {
                 <span className="text-amber-200/90">Show top bar</span>
               </label>
             </div>
-            <WidgetPalette groups={paletteGroups} onAdd={addWidget} />
+            <WidgetPalette groups={paletteGroups} onAdd={addWidget} onAddSpacer={addSpacer} />
           </div>
         )}
 
@@ -688,6 +741,7 @@ export function Dashboard() {
           host={widgetHost}
           onRemoveWidget={removeWidget}
           onTogglePin={togglePin}
+          spacerIds={spacerIds}
         />
       )}
 

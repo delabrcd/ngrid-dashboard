@@ -117,10 +117,11 @@ body {
         (text-2xl → xl → lg → base, keyed on the card's own width) made each card's
         headline a DIFFERENT size depending on its slot width — the "different fonts"
         the operator saw. It's gone. We pick a SINGLE size — text-xl (1.25rem) — that
-        fits the widest default headline ("~$3,003 / $2,800") in its w=2 slot at the
-        smallest fit-grid viewport (verified headlessly: scrollWidth ≤ clientWidth),
-        and the short values at w=1. The wide-content cards (rates, yoy, budget) get
-        w=2 via WIDE_STAT_TYPES so a uniform size never truncates them.
+        fits the headlines in the EVEN strip cell (CHANGE 1: the strip is a 24-col
+        band, 8 cards × 3 cols each, all equal width — verified headlessly: every
+        card's .stat scrollWidth ≤ clientWidth, no clip). The one genuinely wide
+        headline (yoy) had its TEXT compacted ("E −19% · G −3%") to fit the even cell
+        at the uniform font, rather than handing it a wider slot.
      2. FILL the card. The card body is a flex column that SPACES the title and the
         headline to the card's full height (`justify-between`) so there's no large
         empty band — content reaches both edges of the (short) card.

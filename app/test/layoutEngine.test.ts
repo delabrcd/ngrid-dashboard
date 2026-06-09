@@ -672,25 +672,26 @@ describe('the default cockpit paginates cleanly at the pinned page budget', () =
 // schema change and the strip survives the same PUT as the page grid. These tests
 // fence the pure side: the default is today's 8-across band; the strip key reads/
 // writes without touching the real breakpoints; placementsEqual sees strip edits.
-describe('generateStripPlacements — the strip default = today\'s 8-across band', () => {
-  it('lays the stat cards in one full-width band summing to 12 cols on row 0', () => {
+describe('generateStripPlacements — the EVEN strip default (CHANGE 1)', () => {
+  it('lays the 8 stat cards as ONE row of EQUAL-width cards filling the 24-col strip', () => {
     const strip = generateStripPlacements(STATS);
-    // One band: every card on y=0 (today's single-row 8-across strip).
+    // One band: every card on y=0 (the single-row strip).
     expect(strip.every((p) => p.y === 0)).toBe(true);
-    // Widths sum to the 12-col strip grid (no ragged gap), 8 cards across.
-    expect(strip.reduce((s, p) => s + p.w, 0)).toBe(STRIP_COLS);
     expect(strip.length).toBe(STATS.length);
-    // Same 4×w=2 + 4×w=1 distribution the lg cockpit's stat band uses (12/8).
-    expect(strip.filter((p) => p.w === 2).length).toBe(4);
-    expect(strip.filter((p) => p.w === 1).length).toBe(4);
+    // EVEN widths: 24 / 8 = 3 cols each, all identical (the operator's "evenly
+    // spaced" ask — no mixed w=1/w=2). The widths sum to the full 24-col strip with
+    // no remainder, so the row fills edge to edge.
+    expect(STRIP_COLS).toBe(24);
+    expect(strip.every((p) => p.w === 3)).toBe(true);
+    expect(strip.reduce((s, p) => s + p.w, 0)).toBe(STRIP_COLS);
+    // Cards tile left to right with no overlap (x = 0, 3, 6, …, 21).
+    expect(strip.map((p) => p.x)).toEqual([0, 3, 6, 9, 12, 15, 18, 21]);
   });
 
-  it('gives the +1 extra column to the WIDE-content cards (yoy + the widest dollar cards)', () => {
-    // The real 8-card set, in display order. The 12/8 split makes 4 cards w=2 and
-    // 4 w=1; the +1 col must land on the wide-content cards (their headline would
-    // truncate at w=1), not the first-in-order. After the cards-narrow rebalance the
-    // wide set is yoy + the three widest dollar headlines (lifetime/latest/est-next);
-    // the TRIMMED rate cards + the narrow-when-tight budget card sit at w=1.
+  it('is even regardless of card content (no WIDE-content +1 distribution any more)', () => {
+    // The real 8-card set, in display order: every card is the SAME width now —
+    // the yoy/rate/budget cards no longer get a wider slot (the strip is even and
+    // yoy's text was compacted to fit the even width instead).
     const real = [
       'stat:latestBill', 'stat:lifetimeSpend', 'stat:elecRate', 'stat:gasRate',
       'stat:nextBillEstimate', 'stat:emissions', 'stat:yoy', 'stat:budget',
@@ -698,10 +699,22 @@ describe('generateStripPlacements — the strip default = today\'s 8-across band
     const strip = generateStripPlacements(real);
     expect(strip.every((p) => p.y === 0)).toBe(true); // single row
     expect(strip.reduce((s, p) => s + p.w, 0)).toBe(STRIP_COLS);
-    const wide = strip.filter((p) => WIDE_STAT_TYPES.has(p.i));
-    const narrow = strip.filter((p) => !WIDE_STAT_TYPES.has(p.i));
-    expect(wide.every((p) => p.w === 2)).toBe(true);
-    expect(narrow.every((p) => p.w === 1)).toBe(true);
+    const widths = new Set(strip.map((p) => p.w));
+    expect(widths.size).toBe(1); // all equal
+    expect([...widths][0]).toBe(3);
+    // The retired WIDE set no longer affects placement (it's empty now).
+    expect(WIDE_STAT_TYPES.size).toBe(0);
+  });
+
+  it('stays even for other divisible card counts (6 → 4 each, 4 → 6, 3 → 8, 2 → 12)', () => {
+    const counts: Record<number, number> = { 6: 4, 4: 6, 3: 8, 2: 12 };
+    for (const [n, w] of Object.entries(counts)) {
+      const ids = Array.from({ length: Number(n) }, (_, i) => `stat:s${i}`);
+      const strip = generateStripPlacements(ids, Object.fromEntries(ids.map((i) => [i, { minW: 1, minH: 2 }])));
+      expect(strip.every((p) => p.w === w)).toBe(true);
+      expect(strip.reduce((s, p) => s + p.w, 0)).toBe(STRIP_COLS);
+      expect(strip.every((p) => p.y === 0)).toBe(true);
+    }
   });
 
   it('an empty stat set yields an empty strip', () => {

@@ -23,6 +23,7 @@ import { getVizRenderer } from '@/lib/widgets/vizRenderers';
 import { STAT_SPECS, type StatData, type StatSpec } from '@/lib/widgets/statSpec';
 import { BudgetStatCard, StatCard, YoyStatCard } from '@/components/widgets/StatCard';
 import { BillsPanel, type BillsPanelData } from '@/components/widgets/BillsPanel';
+import { Spacer } from '@/components/widgets/Spacer';
 import type { ChartConfig } from '@/lib/prefs';
 import type { ToolsTab } from '@/components/ToolsModal';
 import { essentialHeightPx, pxToMinRows, type StatCardKind } from '@/lib/widgets/cardFit';
@@ -97,6 +98,12 @@ export interface WidgetHost {
   // widget, fed the SAME range-filtered bills + export-scope query fragments the
   // inline rail read in Dashboard.tsx, so it renders byte-identically.
   billsData: BillsPanelData;
+  // Whether the dashboard is in Customize mode (CHANGE 2). The SPACER widget reads
+  // this to switch between its dashed-outline editable form (customizing) and its
+  // invisible space-holding form (view). Optional so a non-dashboard caller can omit
+  // it (spacers then render invisible). A single dashboard-level flag — the same
+  // value WidgetCell passes its cells — so it's correct for every cell.
+  customizing?: boolean;
 }
 
 // WidgetDef (RFC §3.1). `defaultSize` is now REAL (Phase E, #73): the grid size
@@ -212,13 +219,41 @@ const BILLS_PANEL: WidgetDef = {
   render: (host) => <BillsPanel data={host.billsData} />,
 };
 
-// The registry: every chart id, every stat id, plus the bills panel — keyed by
-// widget type. The `chart:`/`stat:`/`panel:` prefixes keep the namespaces
-// distinct in one record (RFC §3.1's `type` examples, e.g. 'tool:compare').
+// The SPACER widget (CHANGE 2, issue #73). Unlike every other widget type — which
+// is a SINGLETON keyed by a fixed id — the spacer is MULTI-INSTANCE: the user can
+// add as many as they like, keyed `spacer:1`, `spacer:2`, … . The registry stores
+// ONE prototype def under the bare `spacer` key; getWidget resolves any concrete
+// `spacer:<n>` id to it (its render/defaultSize/title don't depend on the instance
+// number). A spacer holds its grid cell like a panel but renders invisibly in view
+// mode (it reads host.customizing). Default 2×2 with minW=1/minH=1 (the brief's
+// "1×2, minW 1, minH 1" floor — a 2-wide default reads better in the 12-col grid)
+// so it respects the min-size guarantee and can be dragged small.
+export const SPACER_PREFIX = 'spacer' as const;
+const SPACER_WIDGET: WidgetDef = {
+  type: SPACER_PREFIX,
+  category: 'tool',
+  title: 'Spacer',
+  dataDeps: [],
+  defaultSize: { w: 2, h: 2, minW: 1, minH: 1 },
+  render: (host) => <Spacer customizing={!!host.customizing} />,
+};
+
+// Is a concrete id a spacer instance (`spacer:1`, `spacer:2`, …)? The colon + a
+// non-empty suffix distinguishes it from the bare prototype key.
+export function isSpacerId(type: string): boolean {
+  return type.startsWith(`${SPACER_PREFIX}:`) && type.length > SPACER_PREFIX.length + 1;
+}
+
+// The registry: every chart id, every stat id, plus the bills panel and the spacer
+// PROTOTYPE — keyed by widget type. The `chart:`/`stat:`/`panel:` prefixes keep the
+// namespaces distinct in one record (RFC §3.1's `type` examples, e.g. 'tool:compare').
+// The spacer is stored under its bare prefix (`spacer`); concrete `spacer:<n>`
+// instances resolve to it in getWidget (the multi-instance exception).
 export const WIDGETS: Record<string, WidgetDef> = Object.fromEntries([
   ...CHART_SPECS.map((s) => [`chart:${s.id}`, chartWidget(s)] as const),
   ...STAT_SPECS.map((s) => [`stat:${s.id}`, statWidget(s)] as const),
   [BILLS_PANEL.type, BILLS_PANEL] as const,
+  [SPACER_PREFIX, SPACER_WIDGET] as const,
 ]);
 
 // Type-keyed accessors so callers don't hand-build the prefixed string. A
@@ -231,7 +266,11 @@ export const statWidgetType = (id: string) => `stat:${id}`;
 export const BILLS_PANEL_TYPE = BILLS_PANEL.type;
 
 export function getWidget(type: string): WidgetDef {
-  const w = WIDGETS[type];
+  // Multi-instance spacers (CHANGE 2): any `spacer:<n>` resolves to the single
+  // spacer prototype (its render/size/title are instance-independent). Every other
+  // type is a singleton looked up directly.
+  const key = isSpacerId(type) ? SPACER_PREFIX : type;
+  const w = WIDGETS[key];
   if (!w) throw new Error(`Unknown widget type: ${type}`);
   return w;
 }
@@ -245,7 +284,9 @@ export function getWidget(type: string): WidgetDef {
 export function widgetMins(ids: string[]): Record<string, { minW: number; minH: number }> {
   const out: Record<string, { minW: number; minH: number }> = {};
   for (const id of ids) {
-    const w = WIDGETS[id];
+    // Resolve multi-instance spacers (`spacer:<n>`) to their prototype so a placed
+    // spacer carries its min floor too (CHANGE 2).
+    const w = WIDGETS[isSpacerId(id) ? SPACER_PREFIX : id];
     if (w) out[id] = { minW: w.defaultSize.minW, minH: w.defaultSize.minH };
   }
   return out;

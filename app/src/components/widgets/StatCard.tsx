@@ -139,18 +139,25 @@ export function YoyStatCard({ model, openTools }: { model: YoyStatModel; openToo
         <span className="min-w-0 truncate">vs last year</span>
         <InfoDot tooltip={model.tooltip} ring="focus:ring-amber-500/60" />
       </div>
-      {/* Compact deltas only ("Elec −19% Gas −3%"); the "weather-adjusted vs last
-          year · click to compare" detail moved into the ⓘ tooltip. Headline renders
-          at the single uniform `.stat-card .stat` size. */}
-      <div className="stat flex items-baseline gap-2 truncate">
+      {/* Compact deltas only; the "weather-adjusted vs last year · click to compare"
+          detail moved into the ⓘ tooltip. Headline renders at the single uniform
+          `.stat-card .stat` size. CHANGE 1 (even strip): the yoy card is now an EVEN
+          1/8-of-strip width (was 2/12), so the fuel labels are COMPACTED to single
+          letters ("E −19% · G −3%") and the inter-fuel gap tightened so the two
+          deltas fit the even width at the uniform font without truncating — the
+          operator's "compact the text to fit, don't shrink only its font / widen
+          only this card". The full "Elec/Gas" wording lives in the ⓘ + Compare tab. */}
+      <div className="stat flex items-baseline gap-1.5 truncate">
         {model.elec ? (
           <span>
-            <span className="text-sm text-amber-400">Elec</span> <span className={model.elec.cls}>{model.elec.pct}</span>
+            <span className="text-sm text-amber-400" title="Electricity">E</span>{' '}
+            <span className={model.elec.cls}>{model.elec.pct}</span>
           </span>
         ) : null}
         {model.gas ? (
           <span>
-            <span className="text-sm text-sky-400">Gas</span> <span className={model.gas.cls}>{model.gas.pct}</span>
+            <span className="text-sm text-sky-400" title="Gas">G</span>{' '}
+            <span className={model.gas.cls}>{model.gas.pct}</span>
           </span>
         ) : null}
       </div>
