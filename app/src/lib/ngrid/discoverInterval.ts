@@ -105,27 +105,55 @@ async function main(): Promise<void> {
     .catch(() => {});
   await page.waitForTimeout(4000);
 
-  // 1) Real-time usage tab — hourly, last 24h (the AMI interval payload).
-  await clickByText(page, /real[\s-]?time/i, 'Real-time usage tab');
-  await page.waitForTimeout(5000);
-
-  // 2) Energy usage tab, then the "Day" granularity (daily interval). The
-  //    granularity may be a tab, a button, or a <select> option — try each.
-  await clickByText(page, /energy\s*usage/i, 'Energy usage tab');
-  await page.waitForTimeout(2500);
-  // Granularity (Billing period / Day / Year). Try a native <select> first, then
-  // a click on anything that reads "Day". Each attempt is independent + wrapped.
-  try {
-    const sel = page.locator('select');
-    if (await sel.count()) {
-      await sel.first().selectOption({ label: 'Day' }).catch(() => {});
-      await page.waitForTimeout(3500);
+  // Dump every visible interactive control's text so we can see the REAL labels
+  // (fuel toggle, granularity, tabs) instead of guessing.
+  const dumpControls = async (when: string): Promise<string[]> => {
+    const out: string[] = [];
+    try {
+      const texts = await page.$$eval(
+        'button, a, [role="tab"], [role="button"], [role="radio"], select, .tab, label',
+        (els) =>
+          els
+            .map((e) => (e.textContent || '').replace(/\s+/g, ' ').trim())
+            .filter((t) => t && t.length < 40)
+      );
+      for (const t of texts) if (!out.includes(t)) out.push(t);
+    } catch {
+      /* best effort */
     }
-  } catch {
-    /* no native select */
-  }
-  await clickByText(page, /\bday\b/i, 'Day granularity');
+    console.log(`[discover] controls (${when}): ${out.join(' | ')}`);
+    return out;
+  };
+  const controls: Record<string, string[]> = {};
+  controls.initial = await dumpControls('initial');
+
+  // 1) Electric real-time (known) — confirm + baseline.
+  await clickByText(page, /real[\s-]?time/i, 'Real-time usage tab');
   await page.waitForTimeout(4000);
+  controls.afterRealtime = await dumpControls('after real-time');
+
+  // 2) GAS — the "Energy Usage" tab hosts the "Fuel Type" + "View by" dropdowns.
+  //    Real-Time is electric-only, so gas interval lives here. OPEN each dropdown
+  //    (the options are hidden until opened), then pick Gas + Day. Operator confirms
+  //    gas interval data is real (it 404s on the electric /reads/{premise}/{sp} path).
+  await clickByText(page, /energy\s*usage/i, 'Energy Usage tab');
+  await page.waitForTimeout(3000);
+  await clickByText(page, /fuel\s*type/i, 'Fuel Type dropdown');
+  await page.waitForTimeout(1500);
+  controls.fuelOpen = await dumpControls('Fuel Type open');
+  await clickByText(page, /^\s*gas\s*$/i, 'Gas option');
+  await page.waitForTimeout(3500);
+  await clickByText(page, /view\s*by/i, 'View by dropdown');
+  await page.waitForTimeout(1500);
+  controls.viewOpen = await dumpControls('View by open');
+  await clickByText(page, /^\s*day(ly)?\s*$/i, 'Day option');
+  await page.waitForTimeout(4000);
+  // Also try Hour/Hourly for gas in case the finest gas grain is hourly.
+  await clickByText(page, /view\s*by/i, 'View by dropdown #2');
+  await page.waitForTimeout(1200);
+  await clickByText(page, /^\s*hour(ly)?\s*$/i, 'Hour option');
+  await page.waitForTimeout(3500);
+  controls.afterGas = await dumpControls('after gas');
 
   // Artifact.
   try {
@@ -137,7 +165,7 @@ async function main(): Promise<void> {
     const responses = debugLog.filter((e) => e.kind === 'response').map((e) => e.entry);
     fs.writeFileSync(
       out,
-      JSON.stringify({ capturedAt: new Date().toISOString(), accountLink, requests, responses, net: netLog }, null, 2)
+      JSON.stringify({ capturedAt: new Date().toISOString(), accountLink, controls, requests, responses, net: netLog }, null, 2)
     );
     const keys = [...new Set(responses.flatMap((r) => (r as { keys: string[] }).keys))].join(', ');
     console.log(`[discover] wrote ${out} (${requests.length} gql-req, ${responses.length} gql-resp, ${netLog.length} other xhr; gql keys: ${keys})`);
