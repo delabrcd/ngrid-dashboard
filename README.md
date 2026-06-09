@@ -1,9 +1,9 @@
-# National Grid Dashboard
+# Ember — National Grid Dashboard
 
-[![Release](https://img.shields.io/github/v/release/delabrcd/ngrid-dashboard?sort=semver)](https://github.com/delabrcd/ngrid-dashboard/releases/latest)
-[![CI](https://github.com/delabrcd/ngrid-dashboard/actions/workflows/docker-publish.yml/badge.svg?branch=main)](https://github.com/delabrcd/ngrid-dashboard/actions/workflows/docker-publish.yml)
-[![License: MIT](https://img.shields.io/github/license/delabrcd/ngrid-dashboard)](LICENSE)
-[![GHCR image](https://img.shields.io/badge/ghcr.io-delabrcd%2Fngrid--dashboard-2496ED?logo=docker&logoColor=white)](https://github.com/delabrcd/ngrid-dashboard/pkgs/container/ngrid-dashboard)
+[![Release](https://img.shields.io/github/v/release/delabrcd/ember?sort=semver)](https://github.com/delabrcd/ember/releases/latest)
+[![CI](https://github.com/delabrcd/ember/actions/workflows/docker-publish.yml/badge.svg?branch=main)](https://github.com/delabrcd/ember/actions/workflows/docker-publish.yml)
+[![License: MIT](https://img.shields.io/github/license/delabrcd/ember)](LICENSE)
+[![GHCR image](https://img.shields.io/badge/ghcr.io-delabrcd%2Fember-2496ED?logo=docker&logoColor=white)](https://github.com/delabrcd/ember/pkgs/container/ember)
 
 A self-hosted dashboard for your **National Grid (US)** electricity & gas account.
 It logs into `myaccount.nationalgrid.com`, pulls your **entire** bill + usage history,
@@ -52,16 +52,16 @@ You need Docker + the Docker Compose plugin. **No clone or build required** — 
 two files (the compose file pulls the prebuilt image from GHCR):
 
 ```bash
-mkdir ngrid-dashboard && cd ngrid-dashboard
-curl -fsSLO https://raw.githubusercontent.com/delabrcd/ngrid-dashboard/main/docker-compose.yml
-curl -fsSL  https://raw.githubusercontent.com/delabrcd/ngrid-dashboard/main/.env.example -o .env
+mkdir ember && cd ember
+curl -fsSLO https://raw.githubusercontent.com/delabrcd/ember/main/docker-compose.yml
+curl -fsSL  https://raw.githubusercontent.com/delabrcd/ember/main/.env.example -o .env
 # edit .env: set a DB_PASSWORD (and the matching password in DATABASE_URL)
 nano .env
 docker compose up -d
 ```
 
 (Or download `docker-compose.yml` + `.env.example` from the
-[latest release](https://github.com/delabrcd/ngrid-dashboard/releases/latest).)
+[latest release](https://github.com/delabrcd/ember/releases/latest).)
 
 Open **http://localhost:3000** and **add your National Grid login in the browser** —
 the first-run setup walks you through it (including the **OTP/MFA** step), stores the
@@ -74,11 +74,11 @@ up to date automatically.
 > to your network, but the app and the database container still have to agree on a password.
 > Everything else — your National Grid login and the credential-store key — is handled in the
 > browser on first run. A fully `.env`-free quickstart is tracked in
-> [issue #56](https://github.com/delabrcd/ngrid-dashboard/issues/56).
+> [issue #56](https://github.com/delabrcd/ember/issues/56).
 
-The image (`ghcr.io/delabrcd/ngrid-dashboard`) is built and published by CI; **`:latest` is
+The image (`ghcr.io/delabrcd/ember`) is built and published by CI; **`:latest` is
 what compose pulls by default**. To pin a specific version, see the
-[Releases & CI](https://github.com/delabrcd/ngrid-dashboard/wiki/Releases-and-CI) wiki page.
+[Releases & CI](https://github.com/delabrcd/ember/wiki/Releases-and-CI) wiki page.
 
 ### Updating
 
@@ -117,14 +117,14 @@ unattended install. Full reference + comments live in [`.env.example`](.env.exam
   and password and answering the **OTP/MFA** challenge. The password is stored
   **encrypted at rest**; you'll re-authenticate the same way if a session ever goes stale (a
   clear `needs re-auth` status tells you when). More:
-  [Accounts and Login](https://github.com/delabrcd/ngrid-dashboard/wiki/Accounts-and-Login).
+  [Accounts and Login](https://github.com/delabrcd/ember/wiki/Accounts-and-Login).
 - **Multiple accounts.** A single login can cover several billing accounts — the dashboard
   discovers them all and gives you a **switcher** in the header. Every chart and export follows
   the account you've selected.
 - **Pick a range.** A **visual month/year range picker** (with presets) drives every chart at
   once. Each chart panel is paginated and individually customizable; your range and display
   prefs are remembered. More:
-  [Range and Customization](https://github.com/delabrcd/ngrid-dashboard/wiki/Range-and-Customization).
+  [Range and Customization](https://github.com/delabrcd/ember/wiki/Range-and-Customization).
 - **Read your cost & usage.** Stat cards summarize the current bill and a next-bill **cost
   estimate**; the charts break out usage, supply vs delivery cost, effective **rates**, and a
   **usage-vs-weather** view with degree-days.
@@ -132,7 +132,7 @@ unattended install. Full reference + comments live in [`.env.example`](.env.exam
   date range as a single archive (zip on Windows/macOS, tgz on Linux).
 - **Get notified.** Optionally have a *scheduled* check that finds a new bill ping you exactly
   once over **webhook / ntfy / SMTP** (off by default — enable it in `.env`). More:
-  [Notifications](https://github.com/delabrcd/ngrid-dashboard/wiki/Notifications).
+  [Notifications](https://github.com/delabrcd/ember/wiki/Notifications).
 - **Check on demand.** The scheduler runs itself near your predicted bill date, but the
   **"Check for new bills"** button forces a fresh scrape any time, with a live progress banner.
 
@@ -181,7 +181,7 @@ delete your PDF directory.
 
 Building from source, running the tests, the release flow, and how the scraper works all live
 in [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[project wiki](https://github.com/delabrcd/ngrid-dashboard/wiki).
+[project wiki](https://github.com/delabrcd/ember/wiki).
 
 ## License / disclaimer
 

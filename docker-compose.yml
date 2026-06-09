@@ -7,7 +7,7 @@
 # (Developers: build locally with docker-compose.build.yml — see that file.)
 services:
   app:
-    image: ghcr.io/delabrcd/ngrid-dashboard:latest
+    image: ghcr.io/delabrcd/ember:latest
     container_name: ngrid_dashboard
     restart: unless-stopped
     # All app config (incl. the National Grid password, which may contain $ and #)

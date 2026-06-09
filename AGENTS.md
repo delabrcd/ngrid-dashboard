@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guidance for AI agents (Claude Code, Codex, etc.) working in this repo. Humans should read
-[CONTRIBUTING.md](CONTRIBUTING.md) and the [wiki](https://github.com/delabrcd/ngrid-dashboard/wiki).
+[CONTRIBUTING.md](CONTRIBUTING.md) and the [wiki](https://github.com/delabrcd/ember/wiki).
 
 ## What this is
 
@@ -43,7 +43,7 @@ LAN-only or behind a reverse proxy / SSO.
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 # Hand-calculated unit tests
-docker build --target test -t ngrid-dashboard-test ./app && docker run --rm ngrid-dashboard-test
+docker build --target test -t ember-test ./app && docker run --rm ember-test
 
 # Cross-validate stored/API numbers against the actual bill PDFs (must be green)
 curl -s localhost:3000/api/verify | jq '{ok,total,failed}'
@@ -81,5 +81,5 @@ docker compose exec ngrid_postgres psql -U ngrid -d ngrid
 ## More
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — workflow + PR checklist.
-- [Wiki](https://github.com/delabrcd/ngrid-dashboard/wiki) — Architecture, How the Scraper Works,
+- [Wiki](https://github.com/delabrcd/ember/wiki) — Architecture, How the Scraper Works,
   **Data Accuracy**, Testing, Releases & CI.
