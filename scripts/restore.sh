@@ -90,4 +90,4 @@ docker compose exec -T "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" \
 echo "[restore] done."
 echo "[restore] REMINDER: set NGRID_SECRET_KEY in this stack's .env (from your separate"
 echo "[restore]           secret backup) so the restored NG-logins decrypt — the DB only"
-echo "[restore]           holds ciphertext. Then start the app: docker compose up -d ngrid-dashboard"
+echo "[restore]           holds ciphertext. Then start the app: docker compose up -d"
