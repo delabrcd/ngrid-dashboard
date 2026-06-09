@@ -137,9 +137,9 @@ export interface WidgetLayoutProps {
   savedPlacements: Placements | undefined;
   // Persist a new placements blob (debounced PUT in useDashboardLayout).
   onPlacementsChange: (p: Placements) => void;
-  // True in fit density (the old `prefs.density === 'fit'`). Only at the lg
-  // breakpoint AND in fit density do we paginate + pin the page to the viewport;
-  // otherwise the page scrolls (today's behaviour).
+  // True in the fit layout (always on now — see Dashboard's `const fit = true`).
+  // Only at the lg breakpoint AND in fit do we paginate + pin the page to the
+  // viewport; otherwise the page scrolls (today's behaviour).
   fit: boolean;
   // Customize mode on/off — drag/resize + remove affordances + the palette.
   customizing: boolean;

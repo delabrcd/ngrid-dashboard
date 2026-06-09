@@ -118,15 +118,6 @@ export function parseBillDetail(text: string): BillDetail {
   };
 }
 
-export function toCharges(d: BillDetail): PdfCharges {
-  return {
-    electricSupply: d.electric.supply,
-    electricDelivery: d.electric.delivery,
-    gasSupply: d.gas.supply,
-    gasDelivery: d.gas.delivery,
-  };
-}
-
 export async function extractPdfText(pdfPath: string): Promise<string | null> {
   try {
     const { stdout } = await exec('pdftotext', ['-layout', pdfPath, '-'], { maxBuffer: 8 * 1024 * 1024 });

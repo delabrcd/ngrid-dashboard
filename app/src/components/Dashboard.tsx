@@ -164,8 +164,8 @@ export function Dashboard() {
   // In the grid every widget FILLS its placed cell (the RGL row sizing — fit or
   // fixed — owns the height now), so chartFill is always true and chartHeight is
   // irrelevant (ConfigurableChart uses the fill path). This is the runtime no-
-  // scroll fit replacing FILL_BODY_CLASSES: the cell height comes from RGL's
-  // computed rowHeight, and the chart fills it at 100%.
+  // scroll fit: the cell height comes from RGL's computed rowHeight, and the chart
+  // fills it at 100%.
   // Customize mode (Phase E). A header Customize/Done toggle; only meaningful at
   // ≥xl in fit (the grid is interactive everywhere, but the palette + the cockpit
   // shine on desktop). Off by default — the default view is the static dashboard.
@@ -563,7 +563,7 @@ export function Dashboard() {
     >
       {/* FIXED CHROME (header, banners, range/schedule strip). Tagged so
           WidgetLayout's ResizeObserver can measure its height for the no-scroll
-          fit (replacing the FILL_BODY_CLASSES constant). Everything inside here
+          fit (the grid rowHeight is derived from it). Everything inside here
           is layout the user can't drag; the draggable grid lives below it. */}
       <div data-dashboard-chrome className="flex shrink-0 flex-col gap-3 xl:gap-2">
         {/* HARD TOP-RIGHT ACTIONS (issue #73 mobile fix): a NO-WRAP row with the

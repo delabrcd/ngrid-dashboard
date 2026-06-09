@@ -17,8 +17,9 @@
 //   • `mergePlacements(...)` — the migration safety net: a saved blob is repaired
 //     against a freshly generated default (unknown widgets dropped, newly-added
 //     widgets appended) so a round-trip never loses or corrupts placements.
-//   • `computeFitRowHeight(...)` — the runtime no-scroll fit math (RFC §3.3),
-//     replacing ConfigurableChart's `FILL_BODY_CLASSES` magic constant.
+//   • `computeFitRowHeight(...)` — the runtime no-scroll fit math (RFC §3.3): it
+//     derives the grid rowHeight from the measured chrome so the page fills the
+//     viewport without scrolling.
 
 // The responsive breakpoints, widest → narrowest, mirroring RGL's keys. We use
 // four (RFC §3.3: "lg ≥1280 / md / sm / xs"):
@@ -335,10 +336,10 @@ function statBand(
 // columns to the widest-content cards, producing the mixed 4×w=2 + 4×w=1 strip the
 // operator found "unbalanced". The even-strip iteration drops that distribution: the
 // strip is now a FINE 24-col grid where 24 / 8 divides evenly, so every card gets
-// the SAME width (no remainder to hand out). The set is kept (empty) only because a
-// couple of tests still import it as a name; it no longer affects any placement and
-// the lg-cockpit stat band (statBand, used only when the strip is toggled OFF) just
-// gets an even/edge-to-edge fill from its own remainder logic.
+// the SAME width (no remainder to hand out). The set is now EMPTY but is still
+// threaded through `generateLg`'s (toggle-off) stat band: it's passed to `statBand`
+// (the lg-cockpit band used only when the strip is toggled OFF), where an empty set
+// means no card is singled out for extra width — every card gets an even fill.
 export const WIDE_STAT_TYPES: ReadonlySet<string> = new Set<string>();
 
 // Lay a list of ids as an EVENLY-spaced single band that fills `cols` exactly: each
@@ -669,7 +670,7 @@ export function placementsEqual(a: Placements, b: Placements): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// No-scroll fit math — replaces ConfigurableChart's FILL_BODY_CLASSES constant.
+// No-scroll fit math — derives the grid rowHeight from the measured chrome.
 // ---------------------------------------------------------------------------
 //
 // THE FORMULA (RFC §3.3). At lg we pin the page to the viewport and want the
@@ -736,11 +737,11 @@ function boxesOverlap(
 // Find a free top-left cell for a new w×h tile on a `cols`-wide grid that already
 // holds `existing` placements, scanning rows top-to-bottom then columns left-to-
 // right (reading order). Returns the first {x, y} where the tile fits without
-// overlapping anything. With FREE PLACEMENT (compactType=null + preventCollision,
-// CHANGE 2) RGL no longer auto-tucks a tile dropped at (0,0), and would REJECT a
-// drop that collides — so an "add widget" must land the tile on an empty patch
-// itself. We always find a slot: a row below every existing tile is guaranteed
-// empty, so the scan terminates there at worst. PURE — hand-calc unit-tested.
+// overlapping anything. RGL runs with compactType="vertical" + preventCollision=
+// false, so a tile dropped onto an occupied spot would shove others around; to add
+// a widget cleanly we instead pre-compute an empty patch and drop it there. We
+// always find a slot: a row below every existing tile is guaranteed empty, so the
+// scan terminates there at worst. PURE — hand-calc unit-tested.
 export function findFreeSlot(
   existing: Placement[],
   size: { w: number; h: number },
