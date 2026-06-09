@@ -6,6 +6,7 @@ import { usePrefs } from '@/lib/prefs';
 import { resolveSelectedAccountId, type AccountSummary } from '@/lib/accountSwitcher';
 import { resolveRange, ymOfDate, ymdToYm } from '@/lib/range';
 import { dateLabel, relativeFromNow } from '@/lib/format';
+import { matchesSearch } from '@/lib/settingsSearch';
 import { RefreshButton } from './RefreshButton';
 import { RangeControl } from './RangeControl';
 import { NgLoginsSection } from './NgLoginsSection';
@@ -52,6 +53,32 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
+// ── Group definitions ─────────────────────────────────────────────────────────
+
+type GroupId =
+  | 'accounts'
+  | 'data-collection'
+  | 'notifications'
+  | 'display'
+  | 'analytics'
+  | 'system';
+
+interface GroupDef {
+  id: GroupId;
+  label: string;
+}
+
+const GROUPS: GroupDef[] = [
+  { id: 'accounts',        label: 'Accounts & login' },
+  { id: 'data-collection', label: 'Data collection' },
+  { id: 'notifications',   label: 'Notifications' },
+  { id: 'display',         label: 'Display' },
+  { id: 'analytics',       label: 'Dashboard & analytics' },
+  { id: 'system',          label: 'System / about' },
+];
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export function SettingsView() {
   const { prefs, patch, setRange, reset } = usePrefs();
   const [server, setServer] = useState<ServerSettings | null>(null);
@@ -75,6 +102,10 @@ export function SettingsView() {
   // fills them; defaulted once we know the account's first/last statement.
   const [pdfFrom, setPdfFrom] = useState('');
   const [pdfTo, setPdfTo] = useState('');
+
+  // ── Tab / search UI state (in-memory only; not persisted) ──────────────────
+  const [activeGroup, setActiveGroup] = useState<GroupId>('accounts');
+  const [query, setQuery] = useState('');
 
   const runVerify = async () => {
     setVerifying(true);
@@ -175,29 +206,189 @@ export function SettingsView() {
     loadServer();
   };
 
-  return (
-    <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-50">Settings</h1>
-          <p className="mt-1 text-sm text-slate-400">Display preferences are stored in this browser; automation settings apply server-wide.</p>
+  // ── Control blocks (defined here so they close over state/handlers) ─────────
+  // Each block has: group id, searchable text, and its JSX node.
+  // Tab view renders blocks whose group matches activeGroup.
+  // Search view renders blocks whose searchText matches the query.
+  interface ControlBlock {
+    key: string;
+    group: GroupId;
+    searchText: string;
+    node: React.ReactNode;
+  }
+
+  const blocks: ControlBlock[] = [
+    // ── Accounts & login ──────────────────────────────────────────────────────
+    {
+      key: 'account-info',
+      group: 'accounts',
+      searchText: 'account login account number service address company fuels bills history',
+      node: (
+        <div key="account-info">
+          {server?.account ? (
+            <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+              <div><span className="text-slate-500">Account</span> <span className="text-slate-200">{server.account.accountNumber}</span></div>
+              <div><span className="text-slate-500">Service address</span> <span className="text-slate-200">{server.account.serviceAddress || '—'}</span></div>
+              <div><span className="text-slate-500">Company</span> <span className="text-slate-200">{server.account.companyCode || '—'}</span></div>
+              <div><span className="text-slate-500">Fuels</span> <span className="text-slate-200">{server.account.fuelTypes?.join(', ') || '—'}</span></div>
+              <div><span className="text-slate-500">Bills stored</span> <span className="text-slate-200">{server.billCount}</span></div>
+              <div><span className="text-slate-500">History</span> <span className="text-slate-200">{dateLabel(server.firstStatement)} → {dateLabel(server.latestBill?.statementDate)}</span></div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">No account data yet — run a check from the dashboard.</p>
+          )}
         </div>
-        <Link href="/" className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700">← Dashboard</Link>
-      </header>
+      ),
+    },
+    {
+      key: 'ng-logins',
+      group: 'accounts',
+      searchText: 'National Grid logins credentials login username password authentication',
+      node: (
+        <div key="ng-logins" className="border-t border-slate-800 pt-4">
+          <NgLoginsSection />
+        </div>
+      ),
+    },
 
-      {/* Display preferences */}
-      <section className="card space-y-5">
-        <h2 className="text-lg font-semibold text-slate-100">Display</h2>
+    // ── Data collection ───────────────────────────────────────────────────────
+    {
+      key: 'auto-check',
+      group: 'data-collection',
+      searchText: 'automatic bill checking scheduler predicted next bill last checked next auto-check manually pull refresh',
+      node: (
+        <div key="auto-check" className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Automatic bill checking</div>
+              <div className="text-xs text-slate-500">
+                Predicts your next statement and checks more often as it nears. {savingSched ? 'Saving…' : ''}
+              </div>
+            </div>
+            <Toggle checked={!!server?.schedulerEnabled} onChange={setScheduler} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="pill">Predicted next bill <strong className="text-slate-100">{dateLabel(server?.schedule?.predictedNextBillDate)}</strong></span>
+            <span className="pill">Last checked {relativeFromNow(server?.schedule?.lastCheckedAt)}</span>
+            <span className="pill">Next auto-check {server?.schedulerEnabled ? relativeFromNow(server?.schedule?.nextCheckAt) : 'paused'}</span>
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <RefreshButton onDone={loadServer} />
+            <span className="text-xs text-slate-500">Manually pull the latest bills now.</span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'recent-checks',
+      group: 'data-collection',
+      searchText: 'recent checks runs log collection history trigger status result',
+      node: (
+        <div key="recent-checks" className="border-t border-slate-800 pt-4">
+          <h3 className="mb-3 text-sm font-semibold text-slate-300">Recent checks</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="px-2 py-2">When</th>
+                  <th className="px-2 py-2">Trigger</th>
+                  <th className="px-2 py-2">Status</th>
+                  <th className="px-2 py-2">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-800/70">
+                    <td className="px-2 py-2 text-slate-300">{relativeFromNow(r.startedAt)}</td>
+                    <td className="px-2 py-2 text-slate-400">{r.trigger}</td>
+                    <td className="px-2 py-2">
+                      <span className={r.status === 'SUCCESS' ? 'text-emerald-400' : r.status === 'ERROR' ? 'text-rose-400' : 'text-amber-400'}>{r.status}</span>
+                    </td>
+                    <td className="px-2 py-2 text-slate-400">{r.message || '—'}</td>
+                  </tr>
+                ))}
+                {runs.length === 0 && (
+                  <tr><td className="px-2 py-3 text-slate-500" colSpan={4}>No checks yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ),
+    },
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    // ── Notifications ─────────────────────────────────────────────────────────
+    {
+      key: 'new-bill-notify',
+      group: 'notifications',
+      searchText: 'new-bill notifications channel configured off sent scheduled checks',
+      node: (
+        <div key="new-bill-notify">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">New-bill notifications</div>
+              <div className="text-xs text-slate-500">
+                Sent once per new bill on scheduled checks. Configured via environment — off by default.
+              </div>
+            </div>
+            <span className={`pill ${server?.notify?.configured ? 'border-amber-500/60 text-amber-300' : 'opacity-60'}`}>
+              {server?.notify?.configured ? `via ${server.notify.channel}` : 'off'}
+            </span>
+          </div>
+          {server?.notify?.lastNotifiedStatementDate && (
+            <div className="mt-2 text-xs text-slate-500">
+              Last notified through statement <span className="text-slate-300">{dateLabel(server.notify.lastNotifiedStatementDate)}</span>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'anomaly-notify',
+      group: 'notifications',
+      searchText: 'alert on bill anomalies anomaly usage price weather outside normal channel',
+      node: (
+        <div key="anomaly-notify" className="border-t border-slate-800 pt-4">
+          {/* Anomaly alert on a flagged new bill (issue #45). OFF by default;
+              reuses the configured channel above and only fires when a scheduled
+              scrape brings in a bill whose weather-normalized usage or all-in rate
+              is well outside its robust trailing baseline (at most once per bill). */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Alert on bill anomalies</div>
+              <div className="text-xs text-slate-500">
+                Sends one alert on the channel above when a new bill&apos;s usage (after accounting for the weather) or
+                price is well outside your recent normal. {savingAnomaly ? 'Saving…' : 'Off by default.'}
+                {server?.notify && !server.notify.configured ? ' Configure a channel (above) for this to send.' : ''}
+              </div>
+            </div>
+            <Toggle checked={!!server?.anomalyNotifyEnabled} onChange={setAnomalyNotify} />
+          </div>
+        </div>
+      ),
+    },
+
+    // ── Display ───────────────────────────────────────────────────────────────
+    {
+      key: 'date-range',
+      group: 'display',
+      searchText: 'date range charts bills list exports',
+      node: (
+        <div key="date-range" className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium text-slate-200">Date range</div>
             <div className="text-xs text-slate-500">Drives the charts, the bills list, and the exports below</div>
           </div>
           <RangeControl range={prefs.range} onChange={setRange} allYms={allYms} nowYm={nowYm} />
         </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      ),
+    },
+    {
+      key: 'currency-decimals',
+      group: 'display',
+      searchText: 'currency decimals cents dollar amounts',
+      node: (
+        <div key="currency-decimals" className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium text-slate-200">Currency decimals</div>
             <div className="text-xs text-slate-500">Cents shown on dollar amounts</div>
@@ -211,8 +402,14 @@ export function SettingsView() {
             ))}
           </div>
         </div>
-
-        <div className="space-y-3">
+      ),
+    },
+    {
+      key: 'projection',
+      group: 'display',
+      searchText: '12-month projection charts cost usage dashed estimate on charts',
+      node: (
+        <div key="projection" className="space-y-3">
           <div>
             <div className="text-sm font-medium text-slate-200">12-month projection</div>
             <div className="text-xs text-slate-500">Show an estimate of the next 12 months as a dashed line on the cost &amp; usage charts. The estimated yearly total now lives in the Budget tool (Tools &rarr; Budget), so there&rsquo;s no longer a separate summary card.</div>
@@ -229,50 +426,31 @@ export function SettingsView() {
             </div>
           </div>
         </div>
-
-        {/* Carbon-footprint estimate grid factor (issue #49). Server-side runtime
-            setting (AppSetting), not a browser pref, so it changes the estimate for
-            every viewer. A location-based ESTIMATE — never touches a cost number. */}
-        <div className="space-y-2">
-          <div>
-            <div className="text-sm font-medium text-slate-200">Carbon estimate — grid factor</div>
-            <div className="text-xs text-slate-500">
-              Carbon per unit of electricity, used for the carbon estimate. Leave blank to use your region&apos;s
-              grid average; set your own if you&apos;re on a green or renewable plan. Gas uses a standard
-              published factor.
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 pl-3">
-            <input
-              type="number"
-              step="0.001"
-              min="0"
-              inputMode="decimal"
-              value={gridFactor}
-              placeholder={server?.account?.region ? 'region default' : ''}
-              onChange={(e) => setGridFactor(e.target.value)}
-              className="w-32 rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200"
-            />
-            <button
-              onClick={saveGridFactor}
-              disabled={savingGrid || gridFactor === (server?.gridEmissionFactor ?? '')}
-              className="btn border border-slate-700/70 bg-slate-800/40 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40"
-            >
-              {savingGrid ? 'Saving…' : 'Save'}
-            </button>
-            {server?.effectiveGridFactor != null && (
-              <span className="text-xs text-slate-500">
-                In use: <span className="text-slate-300">{server.effectiveGridFactor} kg/kWh</span>
-                {server.gridEmissionFactor ? '' : ' (region default)'}
-              </span>
-            )}
-          </div>
+      ),
+    },
+    {
+      key: 'reset-display',
+      group: 'display',
+      searchText: 'reset display settings defaults',
+      node: (
+        <div key="reset-display">
+          <button onClick={reset} className="btn border border-slate-700/70 bg-slate-800/40 text-xs text-slate-300 hover:bg-slate-700">
+            Reset display settings to defaults
+          </button>
         </div>
+      ),
+    },
 
-        {/* Budget / annual-spend target (issue #46). A positive dollar target,
-            tracked on the dashboard's budget card (spent so far vs a projected
-            end-of-year total). Calendar-year window. Blank clears it. */}
-        <div className="space-y-2">
+    // ── Dashboard & analytics ─────────────────────────────────────────────────
+    {
+      key: 'budget-target',
+      group: 'analytics',
+      searchText: 'annual spending target budget energy calendar year dashboard budget card',
+      node: (
+        <div key="budget-target" className="space-y-2">
+          {/* Budget / annual-spend target (issue #46). A positive dollar target,
+              tracked on the dashboard's budget card (spent so far vs a projected
+              end-of-year total). Calendar-year window. Blank clears it. */}
           <div>
             <div className="text-sm font-medium text-slate-200">Annual spending target</div>
             <div className="text-xs text-slate-500">
@@ -308,144 +486,72 @@ export function SettingsView() {
             )}
           </div>
         </div>
-
-        <button onClick={reset} className="btn border border-slate-700/70 bg-slate-800/40 text-xs text-slate-300 hover:bg-slate-700">
-          Reset display settings to defaults
-        </button>
-      </section>
-
-      {/* Automation */}
-      <section className="card space-y-4">
-        <h2 className="text-lg font-semibold text-slate-100">Automation</h2>
-        <div className="flex items-center justify-between gap-3">
+      ),
+    },
+    {
+      key: 'grid-factor',
+      group: 'analytics',
+      searchText: 'carbon estimate grid factor electricity green renewable plan region eGRID kg/kWh',
+      node: (
+        <div key="grid-factor" className="space-y-2">
+          {/* Carbon-footprint estimate grid factor (issue #49). Server-side runtime
+              setting (AppSetting), not a browser pref, so it changes the estimate for
+              every viewer. A location-based ESTIMATE — never touches a cost number. */}
           <div>
-            <div className="text-sm font-medium text-slate-200">Automatic bill checking</div>
+            <div className="text-sm font-medium text-slate-200">Carbon estimate — grid factor</div>
             <div className="text-xs text-slate-500">
-              Predicts your next statement and checks more often as it nears. {savingSched ? 'Saving…' : ''}
+              Carbon per unit of electricity, used for the carbon estimate. Leave blank to use your region&apos;s
+              grid average; set your own if you&apos;re on a green or renewable plan. Gas uses a standard
+              published factor.
             </div>
           </div>
-          <Toggle checked={!!server?.schedulerEnabled} onChange={setScheduler} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <span className="pill">Predicted next bill <strong className="text-slate-100">{dateLabel(server?.schedule?.predictedNextBillDate)}</strong></span>
-          <span className="pill">Last checked {relativeFromNow(server?.schedule?.lastCheckedAt)}</span>
-          <span className="pill">Next auto-check {server?.schedulerEnabled ? relativeFromNow(server?.schedule?.nextCheckAt) : 'paused'}</span>
-        </div>
-        <div className="flex items-center gap-3 pt-1">
-          <RefreshButton onDone={loadServer} />
-          <span className="text-xs text-slate-500">Manually pull the latest bills now.</span>
-        </div>
-
-        <div className="border-t border-slate-800 pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-slate-200">New-bill notifications</div>
-              <div className="text-xs text-slate-500">
-                Sent once per new bill on scheduled checks. Configured via environment — off by default.
-              </div>
-            </div>
-            <span className={`pill ${server?.notify?.configured ? 'border-amber-500/60 text-amber-300' : 'opacity-60'}`}>
-              {server?.notify?.configured ? `via ${server.notify.channel}` : 'off'}
-            </span>
-          </div>
-          {server?.notify?.lastNotifiedStatementDate && (
-            <div className="mt-2 text-xs text-slate-500">
-              Last notified through statement <span className="text-slate-300">{dateLabel(server.notify.lastNotifiedStatementDate)}</span>
-            </div>
-          )}
-
-          {/* Anomaly alert on a flagged new bill (issue #45). OFF by default;
-              reuses the configured channel above and only fires when a scheduled
-              scrape brings in a bill whose weather-normalized usage or all-in rate
-              is well outside its robust trailing baseline (at most once per bill). */}
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
-            <div>
-              <div className="text-sm font-medium text-slate-200">Alert on bill anomalies</div>
-              <div className="text-xs text-slate-500">
-                Sends one alert on the channel above when a new bill&apos;s usage (after accounting for the weather) or
-                price is well outside your recent normal. {savingAnomaly ? 'Saving…' : 'Off by default.'}
-                {server?.notify && !server.notify.configured ? ' Configure a channel (above) for this to send.' : ''}
-              </div>
-            </div>
-            <Toggle checked={!!server?.anomalyNotifyEnabled} onChange={setAnomalyNotify} />
+          <div className="flex flex-wrap items-center gap-2 pl-3">
+            <input
+              type="number"
+              step="0.001"
+              min="0"
+              inputMode="decimal"
+              value={gridFactor}
+              placeholder={server?.account?.region ? 'region default' : ''}
+              onChange={(e) => setGridFactor(e.target.value)}
+              className="w-32 rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200"
+            />
+            <button
+              onClick={saveGridFactor}
+              disabled={savingGrid || gridFactor === (server?.gridEmissionFactor ?? '')}
+              className="btn border border-slate-700/70 bg-slate-800/40 text-xs text-slate-200 transition hover:bg-slate-700 disabled:opacity-40"
+            >
+              {savingGrid ? 'Saving…' : 'Save'}
+            </button>
+            {server?.effectiveGridFactor != null && (
+              <span className="text-xs text-slate-500">
+                In use: <span className="text-slate-300">{server.effectiveGridFactor} kg/kWh</span>
+                {server.gridEmissionFactor ? '' : ' (region default)'}
+              </span>
+            )}
           </div>
         </div>
-      </section>
+      ),
+    },
 
-      {/* Account & data */}
-      <section className="card space-y-3">
-        <h2 className="text-lg font-semibold text-slate-100">Account &amp; data</h2>
-        {server?.account ? (
-          <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-            <div><span className="text-slate-500">Account</span> <span className="text-slate-200">{server.account.accountNumber}</span></div>
-            <div><span className="text-slate-500">Service address</span> <span className="text-slate-200">{server.account.serviceAddress || '—'}</span></div>
-            <div><span className="text-slate-500">Company</span> <span className="text-slate-200">{server.account.companyCode || '—'}</span></div>
-            <div><span className="text-slate-500">Fuels</span> <span className="text-slate-200">{server.account.fuelTypes?.join(', ') || '—'}</span></div>
-            <div><span className="text-slate-500">Bills stored</span> <span className="text-slate-200">{server.billCount}</span></div>
-            <div><span className="text-slate-500">History</span> <span className="text-slate-200">{dateLabel(server.firstStatement)} → {dateLabel(server.latestBill?.statementDate)}</span></div>
-          </div>
-        ) : (
-          <p className="text-sm text-slate-400">No account data yet — run a check from the dashboard.</p>
-        )}
-
-        <div className="border-t border-slate-800 pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-slate-200">Download CSV</div>
-              <div className="text-xs text-slate-500">Export the monthly series or the bills list as a spreadsheet-ready file.</div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export?dataset=series${exportScope}`} download>
-                Series
-              </a>
-              <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export?dataset=bills${exportScope}`} download>
-                Bills
-              </a>
-            </div>
-          </div>
+    // ── System / about ────────────────────────────────────────────────────────
+    {
+      key: 'version',
+      group: 'system',
+      searchText: 'version about app',
+      node: (
+        <div key="version" className="flex items-center gap-2 text-sm">
+          <span className="text-slate-500">Version</span>
+          <span className="font-mono text-slate-200">v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}</span>
         </div>
-
-        <div className="border-t border-slate-800 pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-slate-200">Download bill PDFs</div>
-              <div className="text-xs text-slate-500">Bundle every bill PDF in a date range into one archive (tgz on Linux, zip on Windows/macOS).</div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input type="date" value={pdfFrom} max={pdfTo || undefined} onChange={(e) => setPdfFrom(e.target.value)}
-                className="rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200" />
-              <span className="text-xs text-slate-500">to</span>
-              <input type="date" value={pdfTo} min={pdfFrom || undefined} onChange={(e) => setPdfTo(e.target.value)}
-                className="rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200" />
-              {pdfRangeValid ? (
-                <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export/pdfs${pdfExportQuery}`} download>
-                  Download PDFs
-                </a>
-              ) : (
-                <button className="btn cursor-not-allowed border border-slate-800 bg-slate-900/40 text-slate-500" disabled>
-                  Download PDFs
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-slate-800 pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-slate-200">Full backup</div>
-              <div className="text-xs text-slate-500">Download a single restorable archive of the whole app: the database plus every bill PDF.</div>
-            </div>
-            <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href="/api/backup" download>
-              Download full backup
-            </a>
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Database + bill PDFs. Keep your NGRID_SECRET_KEY backed up separately — it&apos;s required to restore saved logins and is not in the archive.
-          </div>
-        </div>
-
-        <div className="border-t border-slate-800 pt-4">
+      ),
+    },
+    {
+      key: 'verify',
+      group: 'system',
+      searchText: 'data check verify all bills numbers statements double-check',
+      node: (
+        <div key="verify" className="border-t border-slate-800 pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium text-slate-200">Data check</div>
@@ -476,51 +582,204 @@ export function SettingsView() {
             </div>
           )}
         </div>
-      </section>
-
-      {/* About */}
-      <section className="card">
-        <h2 className="text-lg font-semibold text-slate-100">About</h2>
-        <div className="mt-3 flex items-center gap-2 text-sm">
-          <span className="text-slate-500">Version</span>
-          <span className="font-mono text-slate-200">v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}</span>
+      ),
+    },
+    {
+      key: 'export-csv',
+      group: 'system',
+      searchText: 'download CSV export series bills spreadsheet',
+      node: (
+        <div key="export-csv" className="border-t border-slate-800 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Download CSV</div>
+              <div className="text-xs text-slate-500">Export the monthly series or the bills list as a spreadsheet-ready file.</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export?dataset=series${exportScope}`} download>
+                Series
+              </a>
+              <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export?dataset=bills${exportScope}`} download>
+                Bills
+              </a>
+            </div>
+          </div>
         </div>
-      </section>
-
-      {/* National Grid logins */}
-      <NgLoginsSection />
-
-      {/* Recent runs */}
-      <section className="card">
-        <h2 className="mb-3 text-lg font-semibold text-slate-100">Recent checks</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="px-2 py-2">When</th>
-                <th className="px-2 py-2">Trigger</th>
-                <th className="px-2 py-2">Status</th>
-                <th className="px-2 py-2">Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((r) => (
-                <tr key={r.id} className="border-t border-slate-800/70">
-                  <td className="px-2 py-2 text-slate-300">{relativeFromNow(r.startedAt)}</td>
-                  <td className="px-2 py-2 text-slate-400">{r.trigger}</td>
-                  <td className="px-2 py-2">
-                    <span className={r.status === 'SUCCESS' ? 'text-emerald-400' : r.status === 'ERROR' ? 'text-rose-400' : 'text-amber-400'}>{r.status}</span>
-                  </td>
-                  <td className="px-2 py-2 text-slate-400">{r.message || '—'}</td>
-                </tr>
-              ))}
-              {runs.length === 0 && (
-                <tr><td className="px-2 py-3 text-slate-500" colSpan={4}>No checks yet.</td></tr>
+      ),
+    },
+    {
+      key: 'export-pdfs',
+      group: 'system',
+      searchText: 'download bill PDFs archive date range tgz zip export',
+      node: (
+        <div key="export-pdfs" className="border-t border-slate-800 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Download bill PDFs</div>
+              <div className="text-xs text-slate-500">Bundle every bill PDF in a date range into one archive (tgz on Linux, zip on Windows/macOS).</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="date" value={pdfFrom} max={pdfTo || undefined} onChange={(e) => setPdfFrom(e.target.value)}
+                className="rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200" />
+              <span className="text-xs text-slate-500">to</span>
+              <input type="date" value={pdfTo} min={pdfFrom || undefined} onChange={(e) => setPdfTo(e.target.value)}
+                className="rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-1 text-xs text-slate-200" />
+              {pdfRangeValid ? (
+                <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href={`/api/export/pdfs${pdfExportQuery}`} download>
+                  Download PDFs
+                </a>
+              ) : (
+                <button className="btn cursor-not-allowed border border-slate-800 bg-slate-900/40 text-slate-500" disabled>
+                  Download PDFs
+                </button>
               )}
-            </tbody>
-          </table>
+            </div>
+          </div>
         </div>
-      </section>
+      ),
+    },
+    {
+      key: 'backup',
+      group: 'system',
+      searchText: 'full backup database bill PDFs restore archive NGRID_SECRET_KEY',
+      node: (
+        <div key="backup" className="border-t border-slate-800 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-slate-200">Full backup</div>
+              <div className="text-xs text-slate-500">Download a single restorable archive of the whole app: the database plus every bill PDF.</div>
+            </div>
+            <a className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700" href="/api/backup" download>
+              Download full backup
+            </a>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            Database + bill PDFs. Keep your NGRID_SECRET_KEY backed up separately — it&apos;s required to restore saved logins and is not in the archive.
+          </div>
+        </div>
+      ),
+    },
+  ];
+
+  // ── Render helpers ────────────────────────────────────────────────────────
+
+  const isSearching = query.trim() !== '';
+
+  // Group panel (tab view)
+  const groupBlocks = blocks.filter((b) => b.group === activeGroup);
+
+  // Search results view — group matched blocks by their group, preserving group order
+  const searchBlocks = blocks.filter((b) => matchesSearch(b.searchText, query));
+  const searchGroupsWithBlocks: { group: GroupDef; blocks: ControlBlock[] }[] = GROUPS.map((g) => ({
+    group: g,
+    blocks: searchBlocks.filter((b) => b.group === g.id),
+  })).filter((x) => x.blocks.length > 0);
+
+  // Group storage labels
+  const storageLabel: Record<GroupId, string> = {
+    accounts:         'server-wide',
+    'data-collection': 'server-wide',
+    notifications:    'server-wide',
+    display:          'stored in this browser',
+    analytics:        'server-wide',
+    system:           'server-wide',
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-50">Settings</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Display preferences are{' '}
+            <span className="text-slate-300">stored in this browser</span>
+            {' '}— all other settings{' '}
+            <span className="text-slate-300">apply server-wide</span>.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Search box */}
+          <div className="relative">
+            <svg className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+            </svg>
+            <input
+              type="search"
+              placeholder="Search settings…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="h-8 w-48 rounded-lg border border-slate-700 bg-slate-800/50 pl-8 pr-3 text-xs text-slate-200 placeholder-slate-500 focus:border-amber-500/60 focus:outline-none"
+            />
+          </div>
+          <Link href="/" className="btn border border-slate-700/70 bg-slate-800/40 text-slate-200 hover:bg-slate-700">← Dashboard</Link>
+        </div>
+      </header>
+
+      {/* Main layout: left rail (desktop) / tab strip (mobile) + content panel */}
+      <div className="flex flex-col gap-0 md:flex-row md:gap-6">
+
+        {/* Left rail / tab strip */}
+        <nav
+          aria-label="Settings sections"
+          className={`mb-4 flex flex-row flex-wrap gap-1 md:mb-0 md:w-48 md:flex-col md:flex-nowrap md:gap-0.5 md:shrink-0 ${isSearching ? 'opacity-40 pointer-events-none select-none' : ''}`}
+        >
+          {GROUPS.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => setActiveGroup(g.id)}
+              className={`rounded-lg px-3 py-2 text-left text-sm transition
+                ${activeGroup === g.id && !isSearching
+                  ? 'bg-amber-500/15 text-amber-300 font-medium'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Content panel */}
+        <div className="min-w-0 flex-1">
+          {isSearching ? (
+            /* Search results view */
+            <div className="card space-y-0">
+              {searchGroupsWithBlocks.length === 0 ? (
+                <p className="py-4 text-sm text-slate-500">No settings match &ldquo;{query}&rdquo;</p>
+              ) : (
+                searchGroupsWithBlocks.map(({ group, blocks: gblocks }) => (
+                  <div key={group.id} className="py-2">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{group.label}</div>
+                    <div className="space-y-4 pl-1">
+                      {gblocks.map((b) => (
+                        <div key={b.key}>{b.node}</div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          ) : (
+            /* Tab group panel */
+            <section className="card space-y-5">
+              {/* Group header */}
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-slate-100">
+                  {GROUPS.find((g) => g.id === activeGroup)?.label}
+                </h2>
+                <span className="text-xs text-slate-500">{storageLabel[activeGroup]}</span>
+              </div>
+
+              {/* Group controls */}
+              <div className="space-y-5">
+                {groupBlocks.map((b) => (
+                  <div key={b.key}>{b.node}</div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
