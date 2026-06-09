@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseIntervalReads,
+  parseAmiEnergyUsages,
   extractAmiMeters,
   amiIntervalUrl,
+  amiEnergyUsagesBody,
+  intervalDateWindow,
   backfillStartFor,
   normalizeFuel,
   unitForFuel,
+  AMI_ENERGY_USAGES_QUERY,
 } from '../src/lib/ngrid/interval';
 
 const BASE = 'https://myaccount.nationalgrid.com';
@@ -99,11 +103,17 @@ describe('parseIntervalReads (hand-calculated)', () => {
 });
 
 describe('extractAmiMeters', () => {
-  it('keeps only hasAmiSmartMeter nodes and normalizes fuel + servicePointNumber', () => {
+  it('keeps only hasAmiSmartMeter nodes and normalizes fuel + servicePointNumber + meterPointNumber', () => {
     const ba = {
       meter: {
         nodes: [
-          { fuelType: 'Electric', servicePointNumber: 12345, meterNumber: 'M1', hasAmiSmartMeter: true },
+          {
+            fuelType: 'Electric',
+            servicePointNumber: 12345,
+            meterNumber: 'M1',
+            meterPointNumber: 2,
+            hasAmiSmartMeter: true,
+          },
           { fuelType: 'Gas', servicePointNumber: '67890', hasAmiSmartMeter: false },
           { fuelType: 'Gas', servicePointNumber: '99999', isSmartMeter: true }, // no hasAmiSmartMeter
         ],
@@ -111,7 +121,24 @@ describe('extractAmiMeters', () => {
     };
     const meters = extractAmiMeters(ba);
     expect(meters).toHaveLength(1);
-    expect(meters[0]).toEqual({ fuelType: 'ELECTRIC', servicePointNumber: '12345', meterNumber: 'M1' });
+    expect(meters[0]).toEqual({
+      fuelType: 'ELECTRIC',
+      servicePointNumber: '12345',
+      meterNumber: 'M1',
+      meterPointNumber: '2',
+    });
+  });
+
+  it('defaults meterPointNumber to "1" when the node omits it', () => {
+    const ba = {
+      meter: {
+        nodes: [
+          { fuelType: 'Gas', servicePointNumber: '100', meterNumber: '03858858', hasAmiSmartMeter: true },
+        ],
+      },
+    };
+    const meters = extractAmiMeters(ba);
+    expect(meters[0].meterPointNumber).toBe('1');
   });
 
   it('drops AMI nodes missing a servicePointNumber', () => {
@@ -162,6 +189,170 @@ describe('backfillStartFor', () => {
 
   it('ignores an unparseable override and falls through', () => {
     expect(backfillStartFor(now, null, 'garbage', 35)).toBe('2026-05-05 12:00:00');
+  });
+});
+
+describe('parseAmiEnergyUsages (gas gql, hand-calculated)', () => {
+  it('infers hourly nodes as 3600s with correct UTC instants', () => {
+    const rows = parseAmiEnergyUsages(
+      [
+        { date: '2026-06-01T00:00:00.000-04:00', fuelType: 'GAS', quantity: 0.02076 },
+        { date: '2026-06-01T01:00:00.000-04:00', fuelType: 'GAS', quantity: 0.0191 },
+        { date: '2026-06-01T02:00:00.000-04:00', fuelType: 'GAS', quantity: 0.018 },
+      ],
+      'GAS'
+    );
+    expect(rows).toHaveLength(3);
+    for (const r of rows) {
+      expect(r.intervalSeconds).toBe(3600);
+      expect(r.fuelType).toBe('GAS');
+      expect(r.unit).toBe('therms');
+      expect(r.source).toBe('portal');
+    }
+    // 00:00 at -04:00 == 04:00 UTC.
+    expect(rows[0].intervalStart.toISOString()).toBe('2026-06-01T04:00:00.000Z');
+    expect(rows[0].quantity).toBeCloseTo(0.02076, 6);
+    expect(rows[2].intervalStart.toISOString()).toBe('2026-06-01T06:00:00.000Z');
+  });
+
+  it('infers daily-spaced nodes as 86400s', () => {
+    const rows = parseAmiEnergyUsages(
+      [
+        { date: '2026-06-01T00:00:00.000-04:00', fuelType: 'GAS', quantity: 1.2 },
+        { date: '2026-06-02T00:00:00.000-04:00', fuelType: 'GAS', quantity: 1.3 },
+        { date: '2026-06-03T00:00:00.000-04:00', fuelType: 'GAS', quantity: 1.1 },
+      ],
+      'GAS'
+    );
+    expect(rows.map((r) => r.intervalSeconds)).toEqual([86400, 86400, 86400]);
+  });
+
+  it('defaults a single node to 3600s', () => {
+    const rows = parseAmiEnergyUsages(
+      [{ date: '2026-06-01T00:00:00.000-04:00', fuelType: 'GAS', quantity: 0.5 }],
+      'GAS'
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].intervalSeconds).toBe(3600);
+  });
+
+  it('last node reuses the previous gap', () => {
+    const rows = parseAmiEnergyUsages(
+      [
+        { date: '2026-06-01T00:00:00.000-04:00', fuelType: 'GAS', quantity: 1 },
+        { date: '2026-06-01T01:00:00.000-04:00', fuelType: 'GAS', quantity: 2 },
+      ],
+      'GAS'
+    );
+    expect(rows.map((r) => r.intervalSeconds)).toEqual([3600, 3600]);
+  });
+
+  it('uses the passed fuelType when the node omits it, and unit follows fuel', () => {
+    const rows = parseAmiEnergyUsages(
+      [{ date: '2026-06-01T00:00:00.000-04:00', quantity: 0.5 }],
+      'Gas'
+    );
+    expect(rows[0].fuelType).toBe('GAS');
+    expect(rows[0].unit).toBe('therms');
+  });
+
+  it('drops non-finite quantities and unparseable dates', () => {
+    const rows = parseAmiEnergyUsages(
+      [
+        { date: '2026-06-01T00:00:00.000-04:00', fuelType: 'GAS', quantity: NaN },
+        { date: 'not-a-date', fuelType: 'GAS', quantity: 1 },
+        { date: '2026-06-01T02:00:00.000-04:00', fuelType: 'GAS', quantity: 0.7 },
+      ],
+      'GAS'
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].quantity).toBeCloseTo(0.7, 6);
+  });
+
+  it('sorts out-of-order nodes and dedups keeping the last value', () => {
+    const rows = parseAmiEnergyUsages(
+      [
+        { date: '2026-06-01T02:00:00.000-04:00', fuelType: 'GAS', quantity: 2 },
+        { date: '2026-06-01T01:00:00.000-04:00', fuelType: 'GAS', quantity: 1 },
+        { date: '2026-06-01T01:00:00.000-04:00', fuelType: 'GAS', quantity: 9 }, // dup of 01:00
+      ],
+      'GAS'
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0].intervalStart.toISOString()).toBe('2026-06-01T05:00:00.000Z');
+    expect(rows[0].quantity).toBe(9); // last 01:00 wins
+    expect(rows[1].intervalStart.toISOString()).toBe('2026-06-01T06:00:00.000Z');
+  });
+
+  it('falls back to 3600 for an absurd (data-hole) gap', () => {
+    const rows = parseAmiEnergyUsages(
+      [
+        { date: '2026-01-01T00:00:00.000-05:00', fuelType: 'GAS', quantity: 1 },
+        { date: '2026-06-01T00:00:00.000-04:00', fuelType: 'GAS', quantity: 2 }, // ~5 months later
+      ],
+      'GAS'
+    );
+    expect(rows[0].intervalSeconds).toBe(3600);
+  });
+
+  it('tolerates a non-array input', () => {
+    expect(parseAmiEnergyUsages(undefined as never, 'GAS')).toEqual([]);
+  });
+});
+
+describe('amiEnergyUsagesBody', () => {
+  it('builds the NrtDailyUsage POST body with the right variables', () => {
+    const body = amiEnergyUsagesBody(
+      { meterNumber: '03858858', servicePointNumber: '100', meterPointNumber: '1' },
+      '520998000',
+      '2026-06-01',
+      '2026-06-07'
+    );
+    expect(body.operationName).toBe('NrtDailyUsage');
+    expect(body.query).toBe(AMI_ENERGY_USAGES_QUERY);
+    expect(body.variables).toEqual({
+      meterNumber: '03858858',
+      premiseNumber: '520998000',
+      servicePointNumber: '100',
+      meterPointNumber: '1',
+      dateFrom: '2026-06-01',
+      dateTo: '2026-06-07',
+    });
+  });
+
+  it('stringifies a missing meterNumber to empty string', () => {
+    const body = amiEnergyUsagesBody(
+      { servicePointNumber: '100', meterPointNumber: '1' },
+      '520998000',
+      '2026-06-01',
+      '2026-06-07'
+    );
+    expect(body.variables.meterNumber).toBe('');
+  });
+});
+
+describe('intervalDateWindow', () => {
+  const now = new Date('2026-06-09T12:00:00Z');
+
+  it('dateTo = now, dateFrom = now − windowDays by default', () => {
+    expect(intervalDateWindow(now, undefined, 35)).toEqual({
+      dateFrom: '2026-05-05',
+      dateTo: '2026-06-09',
+    });
+  });
+
+  it('uses an explicit backfillFromIso override for dateFrom', () => {
+    expect(intervalDateWindow(now, '2025-01-01', 35)).toEqual({
+      dateFrom: '2025-01-01',
+      dateTo: '2026-06-09',
+    });
+  });
+
+  it('ignores an unparseable override and falls back to the window', () => {
+    expect(intervalDateWindow(now, 'garbage', 7)).toEqual({
+      dateFrom: '2026-06-02',
+      dateTo: '2026-06-09',
+    });
   });
 });
 

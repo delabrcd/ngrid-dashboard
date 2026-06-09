@@ -20,9 +20,12 @@ import { extractAccountLinks, buildNavUrl } from './accounts';
 import { parseBillPdf } from './parsePdf';
 import { summarizeGqlRequest, summarizeGqlResponse } from './intervalDebug';
 import {
+  amiEnergyUsagesBody,
   amiIntervalUrl,
   backfillStartFor,
   extractAmiMeters,
+  intervalDateWindow,
+  parseAmiEnergyUsages,
   parseIntervalReads,
   unitForFuel,
   type IntervalReadRow,
@@ -44,6 +47,13 @@ export interface CollectOptions {
 }
 
 const BASE = 'https://myaccount.nationalgrid.com';
+
+// Format a Date as the energy-usage gql `YYYY-MM-DD` (UTC fields), matching
+// interval.ts's window formatting — used to page a wide gas backfill in chunks.
+const fmtGqlDate = (d: Date): string => {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+};
 
 const asArray = (x: any): any[] => (Array.isArray(x?.nodes) ? x.nodes : Array.isArray(x) ? x : []);
 const ymd = (d?: string): string | undefined => (d ? d.slice(0, 10) : undefined);
@@ -473,8 +483,16 @@ async function collectOneAccount(
         process.env.INTERVAL_BACKFILL_FROM,
         Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 35
       );
+      // Per-request span cap for the gql fallback (the gateway caps the range);
+      // a wider backfill is paged in ≤ MAX_GQL_SPAN_DAYS chunks. The default tail
+      // window is a single chunk.
+      const MAX_GQL_SPAN_DAYS = 31;
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      const effectiveWindowDays = Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 35;
       for (const meter of meters) {
         try {
+          // 1) Electric REST first. Self-configuring: electric returns 200/15-min
+          //    here; gas 404s on this path and falls through to the gql replay.
           const url = amiIntervalUrl(BASE, acct.premiseNumber, meter.servicePointNumber, startDateTime);
           log(`interval: fetching ${meter.fuelType} reads (sp ${meter.servicePointNumber})`);
           const r = await ctx.request.get(url, { headers: authHeaders, timeout: 30000 });
@@ -483,12 +501,63 @@ async function collectOneAccount(
             if (Array.isArray(json)) {
               const rows = parseIntervalReads(json, meter.fuelType, unitForFuel(meter.fuelType));
               intervals.push(...rows);
-              log(`interval: ${rows.length} ${meter.fuelType} reads since ${startDateTime}`);
+              log(`interval: ${rows.length} ${meter.fuelType} reads via REST since ${startDateTime}`);
             } else {
-              log(`interval: ${meter.fuelType} response was not an array; skipping`);
+              log(`interval: ${meter.fuelType} REST response was not an array; skipping`);
             }
           } else {
-            log(`interval: ${meter.fuelType} fetch returned HTTP ${r.status()}; skipping`);
+            // 2) Non-2xx on REST → gas gql fallback on the energy-usage gateway.
+            //    Window the [dateFrom, dateTo] range and page it in ≤31-day chunks
+            //    (sequential, with the existing settle delay) so a wide backfill
+            //    stays a good guest. The default tail is a single window.
+            log(`interval: ${meter.fuelType} REST returned HTTP ${r.status()}; trying energy-usage gql`);
+            const { dateFrom, dateTo } = intervalDateWindow(
+              new Date(),
+              process.env.INTERVAL_BACKFILL_FROM,
+              effectiveWindowDays
+            );
+            const fromMs = Date.parse(dateFrom);
+            const toMs = Date.parse(dateTo);
+            let gqlRows = 0;
+            let chunkStart = Number.isFinite(fromMs) ? fromMs : toMs;
+            const endMs = Number.isFinite(toMs) ? toMs : chunkStart;
+            let chunks = 0;
+            while (chunkStart <= endMs) {
+              const chunkEnd = Math.min(chunkStart + MAX_GQL_SPAN_DAYS * DAY_MS, endMs);
+              const chunkFrom = fmtGqlDate(new Date(chunkStart));
+              const chunkTo = fmtGqlDate(new Date(chunkEnd));
+              const gqlResp = await ctx.request.post(`${BASE}/api/energyusage-cu-uwp-gql`, {
+                headers: { ...authHeaders, 'content-type': 'application/json' },
+                data: amiEnergyUsagesBody(meter, acct.premiseNumber, chunkFrom, chunkTo),
+                timeout: 30000,
+              });
+              if (gqlResp.ok()) {
+                const gjson = (await gqlResp.json().catch(() => null)) as {
+                  data?: { amiEnergyUsages?: { nodes?: unknown } };
+                } | null;
+                const nodes = gjson?.data?.amiEnergyUsages?.nodes;
+                if (Array.isArray(nodes)) {
+                  const rows = parseAmiEnergyUsages(
+                    nodes as Array<{ date: string; fuelType?: string; quantity: number }>,
+                    meter.fuelType
+                  );
+                  intervals.push(...rows);
+                  gqlRows += rows.length;
+                } else {
+                  log(`interval: ${meter.fuelType} gql ${chunkFrom}..${chunkTo} had no nodes`);
+                }
+              } else {
+                log(`interval: ${meter.fuelType} gql ${chunkFrom}..${chunkTo} HTTP ${gqlResp.status()}`);
+              }
+              chunks++;
+              if (chunkEnd >= endMs) break;
+              chunkStart = chunkEnd + DAY_MS;
+              // Settle between chunks (good guest).
+              await page.waitForTimeout(1500).catch(() => {});
+            }
+            log(
+              `interval: ${gqlRows} ${meter.fuelType} reads via gql (${chunks} chunk(s)) ${dateFrom}..${dateTo}`
+            );
           }
         } catch (err) {
           log(`interval: ${meter.fuelType} fetch failed: ${err instanceof Error ? err.message : String(err)}`);
