@@ -269,10 +269,16 @@ export function Dashboard() {
   const isPlaced = (type: string) => savedTypes === null || savedTypes.has(type);
   const statIds = availableStats.filter(isPlaced);
   // The monthly charts use `availableCharts` directly (visibility owned by
-  // widgetConfig); the interval widget (no such flag) is gated on placement
-  // presence like the panels, so it's default-visible for a new user and its
-  // removal sticks. It sits AFTER the monthly charts in the 2×2 grid.
-  const chartIds = isPlaced(INTERVAL_WIDGET_TYPE) ? availableChartsAll : availableCharts;
+  // widgetConfig). The interval load-shape widget (#76, no widgetConfig flag) is
+  // treated the SAME way as a newly-shipped chart: it's ALWAYS in the chart band's
+  // default id list, so `mergePlacements` appends it at its default slot for BOTH a
+  // brand-new user AND an existing saved layout that predates it (the "append new"
+  // rule) — i.e. it's default-VISIBLE for everyone, not gated behind saved-layout
+  // membership (which would hide it from every existing user). It sits AFTER the 7
+  // monthly charts in the 2×2 grid. (Persisting an explicit removal would need a
+  // widgetConfig.visible flag like the monthly charts — a follow-up; today it
+  // re-appears on reload if removed, same as any default chart.)
+  const chartIds = availableChartsAll;
   const panelIds = availablePanels.filter(isPlaced);
 
   // The dashboard is ALWAYS the paginated fit layout now (the old 'comfortable'
