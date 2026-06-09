@@ -329,6 +329,97 @@ describe('mergePlacements (hand-calculated)', () => {
     // to its default placement (appended), and the whole set is still complete.
     expect(merged.lg!.map((p) => p.i).sort()).toEqual(def.lg!.map((p) => p.i).sort());
   });
+
+  // -------------------------------------------------------------------------
+  // #110 migration: legacy single-column xs detection + discard
+  // -------------------------------------------------------------------------
+
+  it('#110: a legacy all-(x=0,w=1) xs is discarded so the 2-up default applies', () => {
+    // Build a saved blob whose xs is the legacy single-column stack: every tile
+    // at x=0, w=1 (COLS.xs was 1, so no other arrangement was possible).
+    const legacyXs: Placement[] = [
+      ...STATS.map((i, k) => ({ i, x: 0, y: k * 2, w: 1, h: 2 })),
+      ...CHARTS.map((i, k) => ({ i, x: 0, y: STATS.length * 2 + k * 7, w: 1, h: 7 })),
+      { i: 'panel:bills', x: 0, y: STATS.length * 2 + CHARTS.length * 7, w: 1, h: 7 },
+    ];
+    // Give lg a customized placement to prove other breakpoints are untouched.
+    const customLg: Placement[] = [{ i: 'chart:cost', x: 7, y: 3, w: 5, h: 9 }];
+    const saved = { xs: legacyXs, lg: customLg };
+
+    const merged = mergePlacements(saved, def);
+
+    // xs must equal the 2-up default (legacy discarded).
+    expect(merged.xs).toEqual(def.xs);
+
+    // Spot-check 2-up layout: first two stats are on the same row at x=0 and x=1.
+    const xs = merged.xs!;
+    const stats = xs.filter((p) => p.i.startsWith('stat:'));
+    expect(stats[0].y).toBe(stats[1].y);
+    expect(stats[0].x).toBe(0);
+    expect(stats[1].x).toBe(1);
+
+    // Charts and panels are full-width on the 2-col grid.
+    const charts = xs.filter((p) => p.i.startsWith('chart:'));
+    const panels = xs.filter((p) => p.i.startsWith('panel:'));
+    expect(charts.every((p) => p.w === COLS.xs && p.x === 0)).toBe(true);
+    expect(panels.every((p) => p.w === COLS.xs && p.x === 0)).toBe(true);
+
+    // The customized lg placement survived.
+    const cost = merged.lg!.find((p) => p.i === 'chart:cost')!;
+    expect(cost).toMatchObject({ x: 7, y: 3, w: 5, h: 9 });
+    // All widgets are present in lg too.
+    expect(merged.lg!.map((p) => p.i).sort()).toEqual(def.lg!.map((p) => p.i).sort());
+  });
+
+  it('#110: a real 2-up/customized xs (tile at x=1) is NOT discarded', () => {
+    // A saved xs that already has a tile at x=1 is NOT the legacy signature —
+    // the user deliberately placed it there. The migration must leave it alone.
+    const twoUpXs: Placement[] = [
+      { i: 'stat:a', x: 0, y: 0, w: 1, h: 2 },
+      { i: 'stat:b', x: 1, y: 0, w: 1, h: 2 }, // x=1 → breaks the all-(x=0,w=1) test
+      { i: 'stat:c', x: 0, y: 2, w: 1, h: 2 },
+      { i: 'stat:d', x: 1, y: 2, w: 1, h: 2 },
+      { i: 'stat:e', x: 0, y: 4, w: 1, h: 2 },
+      { i: 'stat:f', x: 1, y: 4, w: 1, h: 2 },
+      { i: 'stat:g', x: 0, y: 6, w: 1, h: 2 },
+      { i: 'stat:h', x: 1, y: 6, w: 1, h: 2 },
+      // One chart moved to a custom position.
+      { i: 'chart:usage', x: 0, y: 8, w: 2, h: 7 },
+    ];
+    const saved = { xs: twoUpXs };
+    const merged = mergePlacements(saved, def);
+
+    // The xs is NOT discarded: the deliberately-placed stat:b at x=1 survives.
+    const b = merged.xs!.find((p) => p.i === 'stat:b')!;
+    expect(b).toMatchObject({ x: 1, y: 0, w: 1, h: 2 });
+
+    // chart:usage at its custom position is kept.
+    const usage = merged.xs!.find((p) => p.i === 'chart:usage')!;
+    expect(usage).toMatchObject({ x: 0, y: 8, w: 2, h: 7 });
+  });
+
+  it('#110: a legacy xs with a chart at w=2 (not all-w=1) is NOT discarded', () => {
+    // If any tile has w≠1 (e.g. already migrated to w=2 for a chart), the
+    // signature check fails and we treat it as a real/current layout.
+    const mixedXs: Placement[] = [
+      { i: 'stat:a', x: 0, y: 0, w: 1, h: 2 },
+      { i: 'chart:usage', x: 0, y: 2, w: 2, h: 7 }, // w=2 → not legacy
+    ];
+    const saved = { xs: mixedXs };
+    const merged = mergePlacements(saved, def);
+
+    // chart:usage kept at its saved w=2 position.
+    const usage = merged.xs!.find((p) => p.i === 'chart:usage')!;
+    expect(usage).toMatchObject({ x: 0, y: 2, w: 2, h: 7 });
+  });
+
+  it('#110: an empty saved xs (no tiles) is NOT treated as legacy — falls back to default', () => {
+    // The guard checks savedBp.length > 0, so an empty xs goes through mergeOneBreakpoint
+    // normally (falls back to the full default), not via the migration path.
+    const saved = { xs: [] };
+    const merged = mergePlacements(saved, def);
+    expect(merged.xs).toEqual(def.xs);
+  });
 });
 
 // ---------------------------------------------------------------------------

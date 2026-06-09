@@ -571,7 +571,16 @@ export function generateDefaultPlacements(input: DefaultLayoutInput): Placements
 export function mergePlacements(saved: unknown, def: Placements): Placements {
   const out: Placements = {};
   for (const bp of Object.keys(def) as Breakpoint[]) {
-    out[bp] = mergeOneBreakpoint(readSavedBp(saved, bp), def[bp] ?? []);
+    let savedBp = readSavedBp(saved, bp);
+    // #110 migration: a saved xs layout where EVERY tile is x=0,w=1 is the legacy
+    // single-column stack (COLS.xs was 1, so no other arrangement was possible — it
+    // can't be a deliberate customization). Discard it so the 2-up generateXs default
+    // applies. The new default places charts/panels at w=2, so a current/2-up xs
+    // layout never matches this signature → real customizations are preserved.
+    if (bp === 'xs' && savedBp.length > 0 && savedBp.every((p) => p.x === 0 && p.w === 1)) {
+      savedBp = [];
+    }
+    out[bp] = mergeOneBreakpoint(savedBp, def[bp] ?? []);
   }
   return out;
 }
