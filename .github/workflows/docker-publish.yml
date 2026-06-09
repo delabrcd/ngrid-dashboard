@@ -20,10 +20,10 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build test image
-        run: docker build --target test -t ngrid-dashboard-test ./app
+        run: docker build --target test -t ember-test ./app
 
       - name: Run unit tests
-        run: docker run --rm ngrid-dashboard-test
+        run: docker run --rm ember-test
 
   # Static analysis: ESLint (next/core-web-vitals) + a TypeScript typecheck
   # (tsc --noEmit). Runs on every PR + push; gates the publish.
@@ -151,7 +151,7 @@ jobs:
         # boot-health summary shows a meaningful version (not 0.0.0-dev).
         run: |
           ver="$(git describe --tags --always | sed 's/^v//')"
-          docker build --build-arg APP_VERSION="$ver" -t ngrid-dashboard-boot ./app
+          docker build --build-arg APP_VERSION="$ver" -t ember-boot ./app
 
       - name: Boot the image
         run: |
@@ -159,7 +159,7 @@ jobs:
             -e DATABASE_URL="postgresql://ngrid:ci@localhost:5432/ngrid?schema=public" \
             -e SCHEDULER_ENABLED=false \
             -e NGRID_USER=ci@example.com -e NGRID_PASS=ci \
-            ngrid-dashboard-boot
+            ember-boot
 
       - name: Wait for the server (entrypoint runs db push, then starts Next)
         run: |
@@ -472,7 +472,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/ngrid-dashboard
+          images: ghcr.io/${{ github.repository_owner }}/ember
           # Publishing a GitHub Release (tag vX.Y.Z) publishes X.Y.Z, X.Y, X and moves
           # :latest. Pushes to main publish :edge only. Every build gets a :sha-xxxxxxx tag.
           tags: |

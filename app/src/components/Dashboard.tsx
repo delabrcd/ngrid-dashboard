@@ -23,6 +23,8 @@ import { RangeControl } from './RangeControl';
 import { NgLoginsSection } from './NgLoginsSection';
 import { ToolsModal, type ToolsTab } from './ToolsModal';
 import { HeaderActions } from './HeaderActions';
+import { Wordmark } from './BrandMark';
+import { BRAND } from '@/lib/brand';
 import { useDashboardData } from './useDashboardData';
 import { dateLabel, relativeFromNow } from '@/lib/format';
 import { STAT_SPECS, type StatData } from '@/lib/widgets/statSpec';
@@ -493,7 +495,10 @@ export function Dashboard() {
       <div className="mx-auto max-w-2xl space-y-6 px-4 py-8 sm:px-6">
         <header className="text-center">
           <div className="flex items-center justify-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-50">Welcome to your National Grid Dashboard</h1>
+            <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-50">
+              <span>Welcome to</span>
+              <Wordmark textClassName="text-2xl" />
+            </h1>
             <span className="rounded-full border border-slate-700/70 bg-slate-800/50 px-2 py-0.5 font-mono text-xs text-slate-400">
               v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}
             </span>
@@ -575,7 +580,9 @@ export function Dashboard() {
         <header className="flex flex-nowrap items-center justify-between gap-x-3">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-lg font-bold tracking-tight text-slate-50 sm:text-xl">National Grid Dashboard</h1>
+              <h1 className="min-w-0 truncate text-lg sm:text-xl">
+                <Wordmark className="align-baseline" />
+              </h1>
               <span className="hidden shrink-0 rounded-full border border-slate-700/70 bg-slate-800/50 px-2 py-0.5 font-mono text-xs text-slate-400 sm:inline">
                 v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'}
               </span>
@@ -763,7 +770,7 @@ export function Dashboard() {
 
       {/* Footer only shows when the page can scroll. */}
       <footer className={`shrink-0 pt-1 text-center text-[11px] text-slate-600 ${lockViewport ? 'xl:hidden' : ''}`}>
-        ngrid-dashboard v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'} · self-hosted · data scraped from your own
+        {BRAND.name} v{process.env.NEXT_PUBLIC_APP_VERSION || 'dev'} · self-hosted · data scraped from your own
         National Grid account · not affiliated with National Grid
       </footer>
     </div>

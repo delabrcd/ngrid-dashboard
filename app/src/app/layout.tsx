@@ -1,4 +1,5 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
+import { BRAND } from '@/lib/brand';
 // react-grid-layout's base CSS (Phase E, #73): grid item positioning + the
 // resize-handle hit area. Imported BEFORE globals.css so our dark slate/amber
 // overrides (in globals.css, .ngrid-rgl scope) win the cascade — RGL ships a
@@ -9,8 +10,14 @@ import './globals.css';
 import { PrefsProvider } from '@/lib/prefs';
 
 export const metadata: Metadata = {
-  title: 'National Grid Dashboard',
-  description: 'Self-hosted analytics for your National Grid usage, bills, and rates.',
+  title: { default: BRAND.name, template: `%s · ${BRAND.name}` },
+  applicationName: BRAND.name,
+  description: `${BRAND.tagline} — self-hosted analytics for your National Grid usage, bills, and rates.`,
+};
+
+export const viewport: Viewport = {
+  colorScheme: 'dark',
+  themeColor: '#f59e0b', // amber-500, matching the app accent
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
