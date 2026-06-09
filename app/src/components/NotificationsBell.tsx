@@ -22,9 +22,12 @@ import Link from 'next/link';
 import { describeAnomaly, type AnomalyDetail } from '@/lib/notifications';
 import type { AnomalyFlag } from '@/lib/anomaly';
 import type { Bill } from './useDashboardData';
+import type { MonthRow } from '@/lib/chartSpec';
 import { usePrefs } from '@/lib/prefs';
 import { DetailModal } from './DetailModal';
-import { usd, dateLabel } from '@/lib/format';
+import { usd, dateLabel, num, rate, signedPct } from '@/lib/format';
+import { buildBillRecap, type RecapComparison, type FuelDelta, type AllInDelta } from '@/lib/billRecap';
+import { ymdToYm } from '@/lib/range';
 
 // One stored log row, as the API returns it. `payload` is the AnomalyFlag (anomaly)
 // or the bill summary (bill) that the detail modal renders.
@@ -51,6 +54,7 @@ interface BillPayload {
 export function NotificationsBell({
   accountId = null,
   bills = [],
+  rows = [],
   onOpenCompare,
 }: {
   // The account the dashboard is scoped to (null = default). Scopes the log fetch.
@@ -58,6 +62,8 @@ export function NotificationsBell({
   // The loaded bills (for the new-bill detail PDF link, joined by statementDate).
   // The payload also carries hasPdf, but we prefer the live bills list when present.
   bills?: Bill[];
+  // The full monthly series — passed down to BillDetailBody for the bill recap (#111).
+  rows?: MonthRow[];
   // Optional cross-link from the anomaly detail to the Tools → Compare tab.
   onOpenCompare?: () => void;
 }) {
@@ -276,7 +282,7 @@ export function NotificationsBell({
         {detail?.kind === 'anomaly' ? (
           <AnomalyDetailBody flag={detail.payload as AnomalyFlag} onOpenCompare={onOpenCompare} onClose={() => setDetail(null)} />
         ) : detail?.kind === 'bill' ? (
-          <BillDetailBody payload={detail.payload as BillPayload} bills={bills} />
+          <BillDetailBody payload={detail.payload as BillPayload} bills={bills} rows={rows} />
         ) : null}
       </DetailModal>
     </div>
@@ -330,16 +336,187 @@ function AnomalyDetailBody({
   );
 }
 
-// New-bill summary body — amount, statement date, service period, and a View PDF
-// link when one exists. The stored payload carries the statement + amount + period
-// + hasPdf; we prefer the live bills list (by statementDate) for hasPdf when it's
-// loaded, falling back to the payload otherwise.
-function BillDetailBody({ payload, bills }: { payload: BillPayload; bills: Bill[] }) {
+// ── Bill Recap helpers ────────────────────────────────────────────────────────
+
+// Direction/color convention: a LOWER bill is good (green); higher is amber/red.
+// Matches the existing anomaly coloring (amber for elevated, green for improved).
+function costColor(delta: number | null | undefined): string {
+  if (delta == null) return 'text-slate-300';
+  if (delta < 0) return 'text-emerald-400'; // cheaper — good
+  if (delta > 0) return 'text-amber-400'; // more expensive — warn
+  return 'text-slate-300';
+}
+
+// Signed dollar delta with true-minus sign.
+function signedUsd(delta: number | null | undefined, dp = 0): string {
+  if (delta == null) return '—';
+  const abs = usd(Math.abs(delta), dp);
+  if (delta < 0) return `−${abs}`;
+  if (delta > 0) return `+${abs}`;
+  return abs;
+}
+
+// One fuel row in the recap table: label | cost Δ | Δ% | usage Δ | rate Δ
+function FuelRecapRow({
+  label,
+  accent,
+  unit,
+  fuel,
+}: {
+  label: string;
+  accent: string;
+  unit: string;
+  fuel: FuelDelta | null;
+}) {
+  if (!fuel) {
+    return (
+      <>
+        <dt className={`font-medium ${accent}`}>{label}</dt>
+        <dd className="text-right text-slate-500">—</dd>
+        <dd className="text-right text-slate-500">—</dd>
+        <dd className="text-right text-slate-500">—</dd>
+        <dd className="text-right text-slate-500">—</dd>
+      </>
+    );
+  }
+  return (
+    <>
+      <dt className={`font-medium ${accent}`}>{label}</dt>
+      <dd className={`text-right ${costColor(fuel.costDelta)}`}>{signedUsd(fuel.costDelta)}</dd>
+      <dd className={`text-right ${costColor(fuel.costDelta)}`}>{signedPct(fuel.costPct)}</dd>
+      <dd className="text-right text-slate-300">
+        {fuel.usageDelta != null
+          ? `${fuel.usageDelta >= 0 ? '+' : ''}${num(Math.round(fuel.usageDelta))} ${unit}`
+          : '—'}
+      </dd>
+      <dd className="text-right text-slate-400">
+        {fuel.rateDelta != null ? `${fuel.rateDelta >= 0 ? '+' : ''}${rate(fuel.rateDelta, 3)}/u` : '—'}
+      </dd>
+    </>
+  );
+}
+
+// All-in row: label | cost Δ | Δ% | per-day note | —
+function AllInRecapRow({ allIn }: { allIn: AllInDelta | null }) {
+  if (!allIn) {
+    return (
+      <>
+        <dt className="font-medium text-slate-300">Total</dt>
+        <dd className="text-right text-slate-500">—</dd>
+        <dd className="text-right text-slate-500">—</dd>
+        <dd className="col-span-2 text-right text-slate-500">—</dd>
+      </>
+    );
+  }
+  return (
+    <>
+      <dt className="font-medium text-slate-300">Total</dt>
+      <dd className={`text-right font-semibold ${costColor(allIn.costDelta)}`}>{signedUsd(allIn.costDelta)}</dd>
+      <dd className={`text-right ${costColor(allIn.costDelta)}`}>{signedPct(allIn.costPct)}</dd>
+      <dd className="col-span-2 text-right text-slate-400 text-[10px]">
+        {allIn.costPerDayDelta != null
+          ? `${allIn.costPerDayDelta >= 0 ? '+' : ''}${usd(allIn.costPerDayDelta, 2)}/day`
+          : null}
+      </dd>
+    </>
+  );
+}
+
+// Color for weather-normalized usage: less usage = good (green), more = amber.
+// Inverse of costColor because lower usage is the "good" direction.
+function usageNormColor(pct: number | null | undefined): string {
+  if (pct == null) return 'text-slate-400';
+  if (pct < 0) return 'text-emerald-400'; // used less per degree-day — good
+  if (pct > 0) return 'text-amber-400'; // used more per degree-day — warn
+  return 'text-slate-400';
+}
+
+// One comparison column (vs last bill or vs year-ago bill).
+function RecapColumn({
+  comparison,
+  heading,
+}: {
+  comparison: RecapComparison;
+  heading: string;
+}) {
+  const { daysA, daysB } = comparison;
+  const diffDays = daysA != null && daysB != null ? daysA - daysB : null;
+
+  // Weather-adjusted usage fragments: one per fuel that has normalizedUsagePct.
+  // "less usage = green" convention (same as usageNormColor).
+  const wxFragments: { label: string; pct: number }[] = [];
+  if (comparison.elec?.normalizedUsagePct != null)
+    wxFragments.push({ label: 'Elec', pct: comparison.elec.normalizedUsagePct });
+  if (comparison.gas?.normalizedUsagePct != null)
+    wxFragments.push({ label: 'Gas', pct: comparison.gas.normalizedUsagePct });
+
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-800/30 p-2.5">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{heading}</span>
+        <span className="text-[10px] text-slate-500">{comparison.baselineLabel}</span>
+      </div>
+      {/* Period-length note when the cycle lengths differ noticeably (>1 day).
+          Direction-aware: this bill's cycle may be longer OR shorter than the
+          baseline, so a raw Δ$ can mislead — point at the per-day figure. */}
+      {diffDays != null && Math.abs(diffDays) > 1 ? (
+        <p className="mb-2 text-[10px] text-slate-500">
+          {Math.abs(diffDays)}-day {diffDays > 0 ? 'longer' : 'shorter'} cycle than baseline
+          {' '}—{' '}
+          {comparison.allIn?.costPerDayDelta != null ? 'see per-day below' : 'compare per-day rate'}
+        </p>
+      ) : null}
+      {/* 5-column grid: label | Δ$ | Δ% | usage Δ | rate Δ */}
+      <dl className="grid grid-cols-[auto,auto,auto,auto,auto] items-baseline gap-x-2 gap-y-1 text-xs">
+        {/* Column headings */}
+        <dt className="text-[10px] text-slate-600" />
+        <dd className="text-right text-[10px] text-slate-600">Δ$</dd>
+        <dd className="text-right text-[10px] text-slate-600">Δ%</dd>
+        <dd className="text-right text-[10px] text-slate-600">usage</dd>
+        <dd className="text-right text-[10px] text-slate-600">rate</dd>
+
+        <FuelRecapRow label="Elec" accent="text-amber-400" unit="kWh" fuel={comparison.elec} />
+        <FuelRecapRow label="Gas" accent="text-sky-400" unit="th" fuel={comparison.gas} />
+        <AllInRecapRow allIn={comparison.allIn} />
+      </dl>
+      {/* Weather-adjusted usage line — shown only when at least one fuel has degree-day data.
+          Strips the weather effect from the raw usage change so you can see if activity
+          (not just temperature) drove the difference. Raw usage is still visible above. */}
+      {wxFragments.length > 0 ? (
+        <p className="mt-1.5 text-[10px] text-slate-500" title="Usage change after removing the weather effect (degree-day normalized). Raw usage Δ shown above.">
+          <span className="text-slate-600">Wx-adj usage — </span>
+          {wxFragments.map((f, i) => (
+            <span key={f.label}>
+              {i > 0 ? <span className="text-slate-700"> · </span> : null}
+              <span className="text-slate-500">{f.label} </span>
+              <span className={usageNormColor(f.pct)}>{signedPct(f.pct)}</span>
+            </span>
+          ))}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// New-bill summary body — amount, statement date, service period, PDF link, and
+// (when the monthly series is available) a Bill Recap comparing this bill to the
+// prior statement and to the same month last year (#111).
+function BillDetailBody({ payload, bills, rows }: { payload: BillPayload; bills: Bill[]; rows: MonthRow[] }) {
   const full = bills.find((x) => x.statementDate === payload.statementDate);
   const periodFrom = full?.periodFrom ?? payload.periodFrom ?? null;
   const periodTo = full?.periodTo ?? payload.periodTo ?? null;
   const hasPdf = full?.hasPdf ?? payload.hasPdf ?? false;
   const period = periodFrom ? `${dateLabel(periodFrom)} – ${dateLabel(periodTo)}` : '—';
+
+  // Build the recap only when we have a series and can derive a ym from the
+  // statement date. This derives from already-stored rows — never persists.
+  const statementYm = ymdToYm(payload.statementDate);
+  const recap = statementYm != null && rows.length > 0
+    ? buildBillRecap(rows, statementYm)
+    : null;
+
+  const hasAnyComparison = recap && (recap.vsLast != null || recap.vsYearAgo != null);
+
   return (
     <div className="space-y-3">
       <div>
@@ -352,6 +529,27 @@ function BillDetailBody({ payload, bills }: { payload: BillPayload; bills: Bill[
         <dt className="text-slate-500">Service period</dt>
         <dd className="text-right text-slate-200">{period}</dd>
       </dl>
+
+      {/* Bill Recap (#111): per-fuel + all-in deltas vs prior bill and same month last year. */}
+      {hasAnyComparison ? (
+        <div className="space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Bill recap</p>
+          <p className="text-[10px] text-slate-500">Period energy cost — not amount due</p>
+          <div className="flex flex-col gap-2">
+            {recap.vsLast ? (
+              <div className="min-w-0">
+                <RecapColumn comparison={recap.vsLast} heading="vs last bill" />
+              </div>
+            ) : null}
+            {recap.vsYearAgo ? (
+              <div className="min-w-0">
+                <RecapColumn comparison={recap.vsYearAgo} heading="vs year ago" />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {hasPdf ? (
         <a
           href={`/api/bills/${payload.statementDate}/pdf`}

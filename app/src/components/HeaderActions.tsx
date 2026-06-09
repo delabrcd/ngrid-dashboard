@@ -30,6 +30,7 @@ import Link from 'next/link';
 import { RefreshButton } from './RefreshButton';
 import { NotificationsBell } from './NotificationsBell';
 import type { Bill } from './useDashboardData';
+import type { MonthRow } from '@/lib/chartSpec';
 
 // The handlers + state the header actions need, lifted from Dashboard so BOTH the
 // inline cluster and the hamburger menu drive the identical logic.
@@ -46,6 +47,7 @@ export interface HeaderActionsProps {
   // Notifications bell inputs (passed straight through).
   accountId: number | null;
   bills: Bill[];
+  rows: MonthRow[];
   // Refresh ("Check for new bills") — the delegated-mode RefreshButton wiring.
   onRefreshDone: () => void;
   onRefreshStarted: (runId: number) => void;
@@ -150,6 +152,7 @@ export function HeaderActions(props: HeaderActionsProps) {
     onOpenTools,
     accountId,
     bills,
+    rows,
     onRefreshDone,
     onRefreshStarted,
     scraping,
@@ -182,7 +185,7 @@ export function HeaderActions(props: HeaderActionsProps) {
           the row comfortably fits (it never wraps; the hamburger covers narrower). */}
       <div className="hidden shrink-0 items-center justify-end gap-2 sm:flex">
         {canCustomize && <CustomizeButton customizing={customizing} onToggle={onToggleCustomize} />}
-        {!empty && <NotificationsBell accountId={accountId} bills={bills} onOpenCompare={onOpenTools} />}
+        {!empty && <NotificationsBell accountId={accountId} bills={bills} rows={rows} onOpenCompare={onOpenTools} />}
         {!empty && (
           <button
             type="button"
@@ -204,7 +207,7 @@ export function HeaderActions(props: HeaderActionsProps) {
           alongside a ☰ hamburger that opens a dropdown with the rest. `flex sm:hidden`
           so it replaces the inline cluster only on narrow screens — no overflow. */}
       <div className="flex shrink-0 items-center justify-end gap-2 sm:hidden">
-        {!empty && <NotificationsBell accountId={accountId} bills={bills} onOpenCompare={onOpenTools} />}
+        {!empty && <NotificationsBell accountId={accountId} bills={bills} rows={rows} onOpenCompare={onOpenTools} />}
         <div className="relative" ref={wrapRef}>
           <button
             type="button"

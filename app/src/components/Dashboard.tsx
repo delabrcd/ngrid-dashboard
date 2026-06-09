@@ -609,6 +609,7 @@ export function Dashboard() {
             onOpenTools={() => openTools('compare')}
             accountId={selectedAccountId}
             bills={bills}
+            rows={rows}
             onRefreshDone={load}
             onRefreshStarted={trackRun}
             scraping={scraping}
