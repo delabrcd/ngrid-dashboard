@@ -42,43 +42,80 @@ function InfoDot({ tooltip, ring, stop }: { tooltip: string; ring: string; stop?
 const tooltipRing = (accent: StatTooltip['accent']) =>
   accent === 'emerald' ? 'focus:ring-emerald-500/60' : 'focus:ring-amber-500/60';
 
-// SIMPLE card: the 4 fixed + Est-next + Carbon. COMPACT body — just the (brief)
-// title (+ its ⓘ) and the headline value; the old sub/detail line moved into the
-// tooltip (the compact-stat-cards iteration). The card is `relative` to anchor the
-// ⓘ ring, exactly as the old estimate / carbon blocks were.
-export function StatCard({ model }: { model: StatCardModel }) {
+// The headline value markup, shared by the static + flickable simple cards.
+function StatValue({ value }: { value: StatCardModel['value'] }) {
   return (
-    // h-full so the card fills its placed grid cell (Phase E, #73). A flex column
-    // that DISTRIBUTES the title + headline across the card's full height
-    // (`justify-between`) so the compact card reads as filled, not half-empty — the
-    // visual-uniformity pass. `overflow-hidden` clips it to its tile so content can
-    // never spill out (issue #73 content-fit). Compact `!px-1.5 !py-2` padding.
-    <div className="stat-card card relative flex h-full flex-col justify-between overflow-hidden !px-1.5 !py-2">
-      <div className="card-title flex items-center gap-1 text-xs">
-        {/* `truncate` so a too-long title ellipsizes rather than overflowing a
-            narrow (w=1) tile — title + headline must never clip (issue #73). */}
-        <span className="min-w-0 truncate">{model.title}</span>
-        <InfoDot tooltip={model.tooltip.text} ring={tooltipRing(model.tooltip.accent)} />
-      </div>
-      {/* The headline renders at the single uniform size set by `.stat-card .stat`
-          (globals.css); `truncate` is the overflow backstop only — it never engages
-          at the default widths (verified headlessly). */}
-      <div className="stat truncate">
-        {typeof model.value === 'string' ? (
-          model.value
-        ) : (
-          <>
-            {model.value.lead}
-            <span className="text-sm text-slate-500">{model.value.unit}</span>
-          </>
-        )}
-      </div>
+    // The headline renders at the single uniform size set by `.stat-card .stat`
+    // (globals.css); `truncate` is the overflow backstop only — it never engages at
+    // the default widths (verified headlessly).
+    <div className="stat truncate">
+      {typeof value === 'string' ? (
+        value
+      ) : (
+        <>
+          {value.lead}
+          {/* The unit is a smaller trailing suffix (rate $/kWh|/therm, carbon kg).
+              11px (down from text-sm/14px) so the longest unit ("/therm", on the
+              narrow w=1 gas-rate tile) still fits without truncating the headline —
+              verified headlessly: .stat scrollWidth ≤ clientWidth on every card,
+              including gas rate in both avg + current modes. */}
+          <span className="text-[11px] text-slate-500">{value.unit}</span>
+        </>
+      )}
     </div>
   );
 }
 
-// Shared keyboard handler for the two clickable bespoke cards: Enter/Space
-// activate, matching the old role=button cards.
+// SIMPLE card: the 4 fixed + Est-next + Carbon. COMPACT body — just the (brief)
+// title (+ its ⓘ) and the headline value; the old sub/detail line moved into the
+// tooltip (the compact-stat-cards iteration). When the model carries a `flick`
+// affordance (the rate cards), the card becomes a clickable button that toggles its
+// headline mode (12-mo avg ↔ current) via `onFlick`; otherwise it's a plain card.
+// The card is `relative` to anchor the ⓘ ring, exactly as the old estimate / carbon
+// blocks were.
+export function StatCard({ model, onFlick }: { model: StatCardModel; onFlick?: () => void }) {
+  const flickable = !!model.flick && !!onFlick;
+  // h-full so the card fills its placed grid cell (Phase E, #73). A flex column that
+  // DISTRIBUTES the title + headline across the card's full height (`justify-between`)
+  // so the compact card reads as filled — the visual-uniformity pass.
+  // `overflow-hidden` clips it to its tile so content can never spill out (issue #73
+  // content-fit). Compact `!px-1.5 !py-2` padding. A flickable card adds the same
+  // clickable affordances the bespoke cards use (cursor/hover/focus ring +
+  // role=button + Enter/Space).
+  const base =
+    'stat-card card relative flex h-full flex-col justify-between overflow-hidden !px-1.5 !py-2';
+  const clickable =
+    ' cursor-pointer transition hover:border-slate-600 hover:bg-slate-800/60 focus:outline-none focus:ring-1 focus:ring-amber-500/60';
+  return (
+    <div
+      className={flickable ? base + clickable : base}
+      {...(flickable
+        ? { role: 'button', tabIndex: 0, onClick: onFlick, onKeyDown: activate(onFlick!) }
+        : {})}
+    >
+      <div className="card-title flex items-center gap-1 text-xs">
+        {/* `truncate` so a too-long title ellipsizes rather than overflowing a
+            narrow (w=1) tile — title + headline must never clip (issue #73). */}
+        <span className="min-w-0 truncate">{model.title}</span>
+        {/* The ⓘ sits inside a clickable (flickable) card, so its onClick must stop
+            propagation or reading the tooltip would also flick the mode. */}
+        <InfoDot tooltip={model.tooltip.text} ring={tooltipRing(model.tooltip.accent)} stop={flickable} />
+        {/* Flick affordance: which mode is showing + a tiny ⇄, so the toggle is
+            discoverable. Pushed to the title row's right edge; presentation-only. */}
+        {model.flick ? (
+          <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-[10px] text-slate-500">
+            <span aria-hidden>⇄</span>
+            <span>{model.flick.label}</span>
+          </span>
+        ) : null}
+      </div>
+      <StatValue value={model.value} />
+    </div>
+  );
+}
+
+// Shared keyboard handler for every clickable card (the two bespoke cards + the
+// flickable rate cards): Enter/Space activate, matching the role=button cards.
 const activate = (fn: () => void) => (e: React.KeyboardEvent) => {
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();

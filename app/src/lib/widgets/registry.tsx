@@ -87,6 +87,12 @@ export interface WidgetHost {
   // Stat inputs.
   statData: StatData;
   openTools: (tab: ToolsTab) => void;
+  // Toggle the rate cards' headline mode (12-mo avg ↔ current) — the flick
+  // interaction (compact-stat-cards iteration). The rate stat cards render a
+  // clickable affordance wired to this; it persists the choice via the display
+  // prefs (rateCardMode). Optional so a non-dashboard caller (the demo gallery) can
+  // omit it and the rate cards render static.
+  flickRateMode?: () => void;
   // Panel inputs (Phase E, #73): the bills rail is now a placeable `panel`
   // widget, fed the SAME range-filtered bills + export-scope query fragments the
   // inline rail read in Dashboard.tsx, so it renders byte-identically.
@@ -179,7 +185,13 @@ function statWidget(spec: StatSpec): WidgetDef {
     },
     render: (host) => {
       const d = host.statData;
-      if (spec.kind === 'simple') return <StatCard model={spec.select(d)} />;
+      if (spec.kind === 'simple') {
+        const model = spec.select(d);
+        // Only the rate cards emit a `flick` affordance; wiring host.flickRateMode as
+        // its onFlick makes the card clickable + keyboard-activatable. A simple card
+        // without `flick` renders static (no onFlick → not clickable).
+        return <StatCard model={model} onFlick={model.flick ? host.flickRateMode : undefined} />;
+      }
       if (spec.kind === 'yoy') return <YoyStatCard model={spec.select(d)} openTools={host.openTools} />;
       return <BudgetStatCard model={spec.select(d)} openTools={host.openTools} />;
     },

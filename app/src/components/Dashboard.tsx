@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MonthRow } from '@/lib/chartSpec';
 import { SPEC_BY_ID } from '@/lib/chartSpec';
 import { seasonForwardRows } from '@/lib/prediction';
@@ -131,8 +131,15 @@ export function Dashboard() {
   // Stat-strip widgets (Phase A, issue #93). The visible specs (their isVisible
   // predicate passed) in declared order. StatData is the exact bag the cards read.
   const statData: StatData = useMemo(
-    () => ({ ov, elecAllIn, gasAllIn, lastRow, currencyDecimals: dp }),
-    [ov, elecAllIn, gasAllIn, lastRow, dp]
+    () => ({ ov, elecAllIn, gasAllIn, lastRow, currencyDecimals: dp, rateCardMode: prefs.rateCardMode }),
+    [ov, elecAllIn, gasAllIn, lastRow, dp, prefs.rateCardMode]
+  );
+  // Flick the rate cards' headline between the trailing-12-mo average and the
+  // current rate (compact-stat-cards iteration). Persists the choice as an ephemeral
+  // per-browser display pref; the rate selectors read it off StatData and stay pure.
+  const flickRateMode = useCallback(
+    () => patch({ rateCardMode: prefs.rateCardMode === 'current' ? 'avg' : 'current' }),
+    [patch, prefs.rateCardMode]
   );
   const visibleStats = STAT_SPECS.filter((s) => s.isVisible(statData));
 
@@ -166,6 +173,7 @@ export function Dashboard() {
     onChartChange: updateLayoutChart,
     statData,
     openTools,
+    flickRateMode,
     billsData: { rangedBills, currencyDecimals: dp, csvScope, pdfScope },
   };
 

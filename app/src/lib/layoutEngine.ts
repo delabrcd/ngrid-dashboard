@@ -326,18 +326,24 @@ function statBand(
   return { items, nextY: y };
 }
 
-// The stat cards whose headline VALUE is intrinsically wide ("$0.220/kWh",
-// "$1.60/therm", the two-fuel YoY "Elec −19% Gas −3%", the budget "~$3,003 /
-// $2,800"). In the single-row 12-col strip the 12/8 split makes four cards w=1
-// (~105px) and four w=2; giving the +1 col to THESE wide cards (instead of the
-// first-in-order) keeps their number from truncating at w=1. The short-value cards
-// (latest bill, lifetime, est-next, carbon) sit happily at w=1. Keyed by widget
-// type so the strip generator can mark them; presentation-only (no number logic).
+// The stat cards that should claim the strip's four `+1` columns (the cards-narrow
+// rebalance, compact-stat-cards iteration). The single-row 12-col strip across 8
+// cards is baseW=1 with `12 % 8 = 4` extra columns, so EXACTLY four cards get +1
+// (w=2) and the other four stay w=1. We hand the +1 to the cards whose headline is
+// next-widest so a uniform 20px headline never truncates:
+//   • yoy ("Elec −19% Gas −3%") — genuinely the widest, two fuels + two deltas.
+//   • the three widest dollar headlines: lifetime ("$12,346"), latest bill
+//     ("$192.50"), est-next ("~$192.24").
+// The rate cards were TRIMMED to 2-dp ($0.22/kWh, supply in the ⓘ) and the budget
+// card hides its " / target" tail when narrow (the bar + ⓘ carry the target), so
+// BOTH now fit w=1 — they're deliberately NOT here (the operator's "rates/budget are
+// wider than necessary"). Carbon ("~1,235 kg") also fits w=1. Keyed by widget type
+// so the strip generator marks them; presentation-only (no number logic).
 export const WIDE_STAT_TYPES: ReadonlySet<string> = new Set([
-  'stat:elecRate',
-  'stat:gasRate',
   'stat:yoy',
-  'stat:budget',
+  'stat:lifetimeSpend',
+  'stat:latestBill',
+  'stat:nextBillEstimate',
 ]);
 
 // Generate the PINNED STRIP's own placements (issue #73 iteration). The strip is

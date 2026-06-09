@@ -117,3 +117,24 @@ describe('mergePrefs projection toggles (hand-calculated)', () => {
     expect(m.showProjectionCard).toBe(true); // explicit new key wins
   });
 });
+
+// rateCardMode (compact-stat-cards iteration): the rate cards' flick choice rides
+// the same display prefs with per-key `??` back-compat — default 'avg' (today's
+// behavior) for new/returning users, an explicit valid value survives, garbage falls
+// back to the default.
+describe('mergePrefs rateCardMode (hand-calculated)', () => {
+  it("defaults to 'avg' when nothing is saved", () => {
+    expect(mergePrefs(null).rateCardMode).toBe('avg');
+    expect(mergePrefs({}).rateCardMode).toBe('avg');
+    expect(DEFAULT_PREFS.rateCardMode).toBe('avg');
+  });
+
+  it('preserves an explicit saved mode', () => {
+    expect(mergePrefs({ rateCardMode: 'current' }).rateCardMode).toBe('current');
+    expect(mergePrefs({ rateCardMode: 'avg' }).rateCardMode).toBe('avg');
+  });
+
+  it('falls back to the default for a garbage value', () => {
+    expect(mergePrefs({ rateCardMode: 'bogus' as never }).rateCardMode).toBe('avg');
+  });
+});

@@ -40,6 +40,7 @@ const mkData = (
   gasAllIn: null,
   lastRow: undefined,
   currencyDecimals: 2,
+  rateCardMode: 'avg',
   ...over,
 });
 
@@ -187,30 +188,57 @@ describe('StatSpec selectors — simple cards', () => {
     expect(m.tooltip.text).toBe('Total spent across all 30 bills on record.');
   });
 
-  it('electric rate: all-in $/kWh with unit span; supply-part in the tooltip', () => {
+  it('electric rate (avg mode): 2-dp all-in $/kWh, flick label, supply + both modes in the tooltip', () => {
     const spec = STAT_SPEC_BY_ID.elecRate;
     if (spec.kind !== 'simple') throw new Error('expected simple');
-    const m = spec.select(mkData({}, { elecAllIn: 0.2456, lastRow: mkLastRow({ elecRateSupply: 0.1 }) }));
-    expect(m.title).toBe('Elec rate');
-    expect(m.value).toEqual({ lead: '$0.246', unit: '/kWh' });
-    expect(m.tooltip.text).toContain('supply part of your latest bill is $0.100/kWh');
+    const m = spec.select(
+      mkData({}, { elecAllIn: 0.2456, lastRow: mkLastRow({ elecRateAllIn: 0.31, elecRateSupply: 0.1 }), rateCardMode: 'avg' })
+    );
+    expect(m.title).toBe('Elec');
+    // Trimmed to 2 decimals so the card fits w=1 ($0.25/kWh, not $0.246/kWh).
+    expect(m.value).toEqual({ lead: '$0.25', unit: '/kWh' });
+    expect(m.flick).toEqual({ label: 'avg' });
+    expect(m.tooltip.text).toContain('12-MONTH AVERAGE');
+    expect(m.tooltip.text).toContain('12-mo average $0.25/kWh; current $0.31/kWh');
+    expect(m.tooltip.text).toContain('supply part of your latest bill is $0.10/kWh');
   });
 
-  it('gas rate: 2-dp all-in $/therm with unit span; supply-part in the tooltip', () => {
+  it('electric rate (current mode): headline flips to the latest month all-in rate', () => {
+    const spec = STAT_SPEC_BY_ID.elecRate;
+    if (spec.kind !== 'simple') throw new Error('expected simple');
+    const m = spec.select(
+      mkData({}, { elecAllIn: 0.2456, lastRow: mkLastRow({ elecRateAllIn: 0.31, elecRateSupply: 0.1 }), rateCardMode: 'current' })
+    );
+    // CURRENT = lastRow.elecRateAllIn, not the trailing-12 average.
+    expect(m.value).toEqual({ lead: '$0.31', unit: '/kWh' });
+    expect(m.flick).toEqual({ label: 'now' });
+    expect(m.tooltip.text).toContain('CURRENT (latest month)');
+  });
+
+  it('gas rate (avg vs current): flicks between the 12-mo average and the latest all-in rate', () => {
     const spec = STAT_SPEC_BY_ID.gasRate;
     if (spec.kind !== 'simple') throw new Error('expected simple');
-    const m = spec.select(mkData({}, { gasAllIn: 1.234, lastRow: mkLastRow({ gasRateSupply: 0.9 }) }));
-    expect(m.title).toBe('Gas rate');
-    expect(m.value).toEqual({ lead: '$1.23', unit: '/therm' });
-    expect(m.tooltip.text).toContain('supply part of your latest bill is $0.90/therm');
+    const avg = spec.select(
+      mkData({}, { gasAllIn: 1.234, lastRow: mkLastRow({ gasRateAllIn: 1.6, gasRateSupply: 0.9 }), rateCardMode: 'avg' })
+    );
+    expect(avg.title).toBe('Gas');
+    expect(avg.value).toEqual({ lead: '$1.23', unit: '/therm' });
+    expect(avg.flick).toEqual({ label: 'avg' });
+    const cur = spec.select(
+      mkData({}, { gasAllIn: 1.234, lastRow: mkLastRow({ gasRateAllIn: 1.6, gasRateSupply: 0.9 }), rateCardMode: 'current' })
+    );
+    expect(cur.value).toEqual({ lead: '$1.60', unit: '/therm' });
+    expect(cur.tooltip.text).toContain('supply part of your latest bill is $0.90/therm');
   });
 
-  it('rate cards show — for a null rate', () => {
+  it('rate cards show — for a null rate (both modes)', () => {
     const elec = STAT_SPEC_BY_ID.elecRate;
     if (elec.kind !== 'simple') throw new Error('expected simple');
-    const m = elec.select(mkData({}, { elecAllIn: null, lastRow: undefined }));
-    expect(m.value).toEqual({ lead: '—', unit: '/kWh' });
-    expect(m.tooltip.text).toContain('supply part of your latest bill is —/kWh');
+    const avg = elec.select(mkData({}, { elecAllIn: null, lastRow: undefined, rateCardMode: 'avg' }));
+    expect(avg.value).toEqual({ lead: '—', unit: '/kWh' });
+    expect(avg.tooltip.text).toContain('supply part of your latest bill is —/kWh');
+    const cur = elec.select(mkData({}, { elecAllIn: null, lastRow: undefined, rateCardMode: 'current' }));
+    expect(cur.value).toEqual({ lead: '—', unit: '/kWh' });
   });
 
   it('est-next: ~point headline; low–high range + estimate basis in the tooltip (amber)', () => {

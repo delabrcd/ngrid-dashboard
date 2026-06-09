@@ -685,11 +685,12 @@ describe('generateStripPlacements — the strip default = today\'s 8-across band
     expect(strip.filter((p) => p.w === 1).length).toBe(4);
   });
 
-  it('gives the +1 extra column to the WIDE-content cards (yoy / budget / rates)', () => {
+  it('gives the +1 extra column to the WIDE-content cards (yoy + the widest dollar cards)', () => {
     // The real 8-card set, in display order. The 12/8 split makes 4 cards w=2 and
     // 4 w=1; the +1 col must land on the wide-content cards (their headline would
-    // truncate at w=1), not the first-in-order. So the 4 wide types are w=2 and the
-    // short-value cards (latest bill, lifetime, est-next, carbon) are w=1.
+    // truncate at w=1), not the first-in-order. After the cards-narrow rebalance the
+    // wide set is yoy + the three widest dollar headlines (lifetime/latest/est-next);
+    // the TRIMMED rate cards + the narrow-when-tight budget card sit at w=1.
     const real = [
       'stat:latestBill', 'stat:lifetimeSpend', 'stat:elecRate', 'stat:gasRate',
       'stat:nextBillEstimate', 'stat:emissions', 'stat:yoy', 'stat:budget',

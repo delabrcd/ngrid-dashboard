@@ -17,6 +17,15 @@ export type { ChartConfig };
 // is the classic taller, page-scrolling layout. Only affects ≥1280px.
 export type Density = 'fit' | 'comfortable';
 
+// Which rate the elec/gas rate stat cards show (compact-stat-cards iteration,
+// issue #73): 'avg' = the trailing-12-month average all-in rate (the long-standing
+// default headline); 'current' = the latest month's all-in rate. The user FLICKS
+// a rate card between the two by clicking it; the choice is an ephemeral per-browser
+// display pref (it changes nothing about the underlying numbers — both rates already
+// exist in StatData; this only picks which one the headline shows). Default 'avg'
+// preserves today's behavior.
+export type RateCardMode = 'avg' | 'current';
+
 export interface Prefs {
   // Range selection (issue #24). The RangePref model (preset + custom ym bounds)
   // replaces the old `rangeMonths` number; a stale rangeMonths is migrated on load.
@@ -30,6 +39,10 @@ export interface Prefs {
   // saved legacy `showProjection` is migrated into both in mergePrefs().
   showProjectionOnCharts: boolean;
   showProjectionCard: boolean;
+  // Which rate the elec/gas rate stat cards show (compact-stat-cards iteration).
+  // Flicked per-browser by clicking a rate card; default 'avg' (trailing-12-mo
+  // average, today's behavior). Display-only — see RateCardMode.
+  rateCardMode: RateCardMode;
   order: string[];
   charts: Record<string, ChartConfig>;
   // The account the dashboard is scoped to. null = the default account (and the
@@ -56,6 +69,7 @@ export const DEFAULT_PREFS: Prefs = {
   density: 'fit',
   showProjectionOnCharts: true,
   showProjectionCard: true,
+  rateCardMode: 'avg',
   selectedAccountId: null,
   dismissedNotifications: [],
   showReadNotifications: false,
@@ -90,6 +104,12 @@ export function mergePrefs(
     density: saved.density === 'comfortable' || saved.density === 'fit' ? saved.density : DEFAULT_PREFS.density,
     showProjectionOnCharts: saved.showProjectionOnCharts ?? legacyProjection,
     showProjectionCard: saved.showProjectionCard ?? legacyProjection,
+    // Per-key `??` back-compat: only an explicit valid value is kept, else default
+    // 'avg' (today's behavior). Guards against a malformed persisted string.
+    rateCardMode:
+      saved.rateCardMode === 'current' || saved.rateCardMode === 'avg'
+        ? saved.rateCardMode
+        : DEFAULT_PREFS.rateCardMode,
     selectedAccountId: saved.selectedAccountId ?? DEFAULT_PREFS.selectedAccountId,
     // Defend against a malformed persisted value (only keep strings); default [].
     dismissedNotifications: Array.isArray(saved.dismissedNotifications)
