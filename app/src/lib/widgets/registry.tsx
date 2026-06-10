@@ -15,6 +15,46 @@
 //     shared StatCard renderer or, for the two bespoke cards, their dedicated
 //     render fns. All number/selector logic is the pure StatSpec; the registry
 //     only routes a spec to its renderer.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// HOW TO ADD A NEW WIDGET (read this before adding one)
+// ─────────────────────────────────────────────────────────────────────────────
+// There are two kinds of widget you might add, and they differ in how visibility
+// is tracked. Pick the right path or the dashboard layout WILL break (see the
+// cautionary tale at the end).
+//
+// A) A SELF-CONTAINED widget (own data fetch + Recharts), e.g. IntervalLoadShape /
+//    IntervalHistory. This is the simplest path and does NOT touch the ChartSpec /
+//    ConfigurableChart / vizType seam.
+//    1. Build the component in `app/src/components/widgets/<Name>.tsx` ('use client').
+//       Read account scope from `host.accountId`; handle loading / EMPTY / populated
+//       states (an empty widget reads as broken). Keep number/parse logic in a PURE,
+//       unit-tested lib (e.g. lib/intervalProfile.ts) — not in the component.
+//    2. Register it below: export a `type` const, add a `WidgetDef`
+//       ({ type, category:'chart', dataDeps:[], render: (host) => <Name … />,
+//       defaultSize:{w,h,minW,minH} }), and put it in the `WIDGETS` map. Update the
+//       registry-count assertion in `app/test/widgets.test.ts`.
+//    3. Make it default-visible + REMOVABLE in `app/src/components/Dashboard.tsx`:
+//       add its type to `availableChartsAll` AND to `intervalWidgetTypes` (the
+//       `chartIds = [...availableCharts, ...intervalWidgetTypes.filter(isPlaced)]`
+//       line), and add a `removed…` entry to the Customize palette list so it can be
+//       re-added. `isPlaced` gives you: shown by default on a fresh layout, removal
+//       that STICKS, and re-add via the clean findFreeSlot path.
+//
+// B) A declarative TIMESERIES chart over the monthly series: add a `ChartSpec` to
+//    `lib/chartSpec.ts` (`CHART_SPECS`) + its config to `lib/chartConfig.ts`
+//    (DEFAULT_CHART_ORDER/CONFIG). Visibility is owned by `widgetConfig.visible`
+//    (Settings + the in-chart toggle); `availableCharts` already filters on it. No
+//    Dashboard wiring beyond the spec. (Non-timeseries vizTypes — profile/heatmap/
+//    scatter — need the #95 Phase C renderer; don't shoehorn them through here.)
+//
+// ⚠ CAUTION (the #121 bug): do NOT put a non-spec widget UNCONDITIONALLY into
+// `chartIds` (e.g. `chartIds = availableChartsAll`). That force-appends it every
+// render via mergePlacements, so (a) the user can't remove it — it re-appears — and
+// (b) the forced append lands it in an overflowing extra row that pushes a chart
+// and the pager off-screen in the fit cockpit. ALWAYS gate a non-spec widget on
+// `isPlaced` (path A.3). A fresh layout still shows it (savedTypes === null →
+// isPlaced true); the clean paginator lays it out without overflow.
 
 import type { ReactNode } from 'react';
 import { CHART_SPECS, type ChartSpec } from '@/lib/chartSpec';

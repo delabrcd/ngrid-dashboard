@@ -271,16 +271,19 @@ export function Dashboard() {
   const isPlaced = (type: string) => savedTypes === null || savedTypes.has(type);
   const statIds = availableStats.filter(isPlaced);
   // The monthly charts use `availableCharts` directly (visibility owned by
-  // widgetConfig). The interval load-shape widget (#76, no widgetConfig flag) is
-  // treated the SAME way as a newly-shipped chart: it's ALWAYS in the chart band's
-  // default id list, so `mergePlacements` appends it at its default slot for BOTH a
-  // brand-new user AND an existing saved layout that predates it (the "append new"
-  // rule) — i.e. it's default-VISIBLE for everyone, not gated behind saved-layout
-  // membership (which would hide it from every existing user). It sits AFTER the 7
-  // monthly charts in the 2×2 grid. (Persisting an explicit removal would need a
-  // widgetConfig.visible flag like the monthly charts — a follow-up; today it
-  // re-appears on reload if removed, same as any default chart.)
-  const chartIds = availableChartsAll;
+  // widgetConfig). The interval widgets (#76/#121) have NO widgetConfig flag, so —
+  // like the stats/panels — placement PRESENCE is their removed/shown signal: gate
+  // them on `isPlaced`. This means:
+  //   • a brand-new layout (savedTypes === null) → isPlaced true → both show by
+  //     default, laid out cleanly by the fit paginator;
+  //   • REMOVAL STICKS — removeWidget strips the tile, savedTypes loses it,
+  //     isPlaced goes false, and it drops out of chartIds (no `mergePlacements`
+  //     re-append, no overflowing 3rd row);
+  //   • re-add from the Customize palette via the clean findFreeSlot path.
+  // (Earlier this list was unconditional `availableChartsAll`, which force-appended
+  // the tiles every render — breaking removal AND overflowing the fit. #121 fix.)
+  const intervalWidgetTypes = [INTERVAL_WIDGET_TYPE, INTERVAL_HISTORY_WIDGET_TYPE];
+  const chartIds = [...availableCharts, ...intervalWidgetTypes.filter(isPlaced)];
   const panelIds = availablePanels.filter(isPlaced);
 
   // The dashboard is ALWAYS the paginated fit layout now (the old 'comfortable'
