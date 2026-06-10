@@ -112,7 +112,7 @@ async function runPortalTask(
     const result = await HANDLERS[task.kind].run(ctx);
     await writeBack(task.id, now, result);
     await applyArm(result.arm);
-    acc.note(task.kind, result.status);
+    acc.note(task.kind, result.status, result.metrics);
   } catch (err: any) {
     log(`task ${task.kind}#${task.accountId ?? '-'} failed: ${String(err?.message || err).slice(0, 200)}`);
     await writeBack(task.id, now, {
@@ -124,20 +124,41 @@ async function runPortalTask(
   }
 }
 
-// Small mutable accumulator for the ScrapeRun final summary.
+// Small mutable accumulator for the ScrapeRun final summary. Tracks per-task
+// counts AND the scrape metrics (bills/new/PDFs/accounts) folded in from each
+// task result so summary()/billsAdded match the legacy run.ts contract.
 class RunAccumulator {
   ran = 0;
   errors = 0;
   byKind: Record<string, number> = {};
   firstAccountId?: number;
-  note(kind: TaskKind, status: TaskResult['status']): void {
+  billsTotal = 0;
+  billsAdded = 0;
+  pdfsDownloaded = 0;
+  accountCount = 0;
+  sawMetrics = false;
+  // Record a task outcome and fold in any scrape metrics it reported.
+  note(kind: TaskKind, status: TaskResult['status'], metrics?: TaskResult['metrics']): void {
     this.ran += 1;
     if (status === 'ERROR') this.errors += 1;
     this.byKind[kind] = (this.byKind[kind] ?? 0) + 1;
+    if (metrics) {
+      this.sawMetrics = true;
+      this.billsTotal += metrics.billsTotal ?? 0;
+      this.billsAdded += metrics.billsAdded ?? 0;
+      this.pdfsDownloaded += metrics.pdfsDownloaded ?? 0;
+      this.accountCount += metrics.accountCount ?? 0;
+    }
   }
   summary(): string {
     const parts = Object.entries(this.byKind).map(([k, n]) => `${k}×${n}`);
-    return `${this.ran} task(s)${parts.length ? ': ' + parts.join(', ') : ''}${this.errors ? `; ${this.errors} error(s)` : ''}`;
+    const taskCounts = `${this.ran} task(s)${parts.length ? ': ' + parts.join(', ') : ''}${this.errors ? `; ${this.errors} error(s)` : ''}`;
+    // When a scrape ran, lead with the legacy-spirit metrics line (the UI's
+    // recent-checks shows this), then keep the per-task counts (still useful).
+    if (this.sawMetrics) {
+      return `${this.accountCount} account(s): ${this.billsTotal} bills (${this.billsAdded} new), ${this.pdfsDownloaded} PDFs; ${taskCounts}`;
+    }
+    return taskCounts;
   }
 }
 
@@ -151,9 +172,12 @@ async function dispatch(
   trigger: 'SCHEDULED' | 'MANUAL',
   now: Date,
   log: ProgressFn,
-  skipNeedsReauth: boolean
+  skipNeedsReauth: boolean,
+  // Optional shared accumulator so a multi-pass tick (synthetic fresh-install
+  // pass + persistable pass) folds its scrape metrics into ONE ScrapeRun summary.
+  sharedAcc?: RunAccumulator
 ): Promise<{ summaryMessage: string; billsAdded: number; accountId?: number }> {
-  const acc = new RunAccumulator();
+  const acc = sharedAcc ?? new RunAccumulator();
 
   // Resolve each portal task's login (account.loginId; env pass = undefined).
   const accountIds = [...new Set(portalTasks.map((t) => t.accountId).filter((x): x is number => x != null))];
@@ -228,7 +252,7 @@ async function dispatch(
       const result = await HANDLERS[task.kind].run(ctx);
       await writeBack(task.id, now, result);
       await applyArm(result.arm);
-      acc.note(task.kind, result.status);
+      acc.note(task.kind, result.status, result.metrics);
     } catch (err: any) {
       log(`task ${task.kind}#${task.accountId ?? '-'} failed: ${String(err?.message || err).slice(0, 200)}`);
       await writeBack(task.id, now, { nextRunAt: null, status: 'ERROR', reason: String(err?.message || err).slice(0, 200) });
@@ -236,7 +260,9 @@ async function dispatch(
     }
   }
 
-  return { summaryMessage: acc.summary(), billsAdded: 0, accountId: acc.firstAccountId };
+  // Return the real summed new-bill count so runWithScrapeRun writes
+  // ScrapeRun.billsAdded correctly (was hardcoded 0).
+  return { summaryMessage: acc.summary(), billsAdded: acc.billsAdded, accountId: acc.firstAccountId };
 }
 
 // One-time process bootstrap (env→NgLogin cutover + seed the ScheduledTask rows).
@@ -317,11 +343,15 @@ export async function runTick(
 
   await runWithScrapeRun(trigger, async (progress) => {
     // Run synthetic (fresh-install) full-scrape(s) first under the same session
-    // machinery, then the persistable portal tasks, then non-portal.
+    // machinery, then the persistable portal tasks, then non-portal. A shared
+    // accumulator folds BOTH passes' scrape metrics into the one ScrapeRun summary
+    // (on a fresh install the synthetic pass IS the scrape — its bills/PDFs would
+    // otherwise be lost).
+    const acc = new RunAccumulator();
     if (syntheticPortal.length) {
-      await dispatch(syntheticPortal, [], trigger, now, progress, /*skipNeedsReauth*/ true);
+      await dispatch(syntheticPortal, [], trigger, now, progress, /*skipNeedsReauth*/ true, acc);
     }
-    return dispatch(persistablePortal, nonPortal, trigger, now, progress, /*skipNeedsReauth*/ true);
+    return dispatch(persistablePortal, nonPortal, trigger, now, progress, /*skipNeedsReauth*/ true, acc);
   });
 
   return { ran: true, reason: freshInstall ? 'initial' : 'due' };

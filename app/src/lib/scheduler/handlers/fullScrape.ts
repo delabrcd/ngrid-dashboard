@@ -125,12 +125,29 @@ async function run(ctx: TaskContext): Promise<TaskResult> {
   const arm: ArmSpec[] = [];
   let thisTaskNextRunAt: Date | null = null;
   let lastNextRunAt: Date | null = null;
+  // Scrape metrics summed across the accounts discovered in this pass, so the
+  // runner can rebuild the legacy ScrapeRun summary + billsAdded.
+  let billsTotal = 0;
+  let billsAdded = 0;
+  let pdfsDownloaded = 0;
   for (const result of results) {
     const summary = await persist(result);
     const accountId = summary.accountId;
+    billsTotal += summary.billsTotal;
+    billsAdded += summary.billsAdded;
+    pdfsDownloaded += result.pdfsDownloaded;
     const { nextRunAt, hasRecentPendingPdf } = await computeAndWriteSchedule(accountId, now);
     lastNextRunAt = nextRunAt;
     if (accountId === task.accountId) thisTaskNextRunAt = nextRunAt;
+
+    // Arm a real per-account full-scrape row at this account's computed cadence.
+    // This is the ONLY thing that creates a persisted full-scrape row for an
+    // account discovered via the synthetic fresh-install env pass (task.id<0,
+    // accountId null): without it no full-scrape row ever exists, needsFreshInstall
+    // stays true forever, and the runner re-runs a full env scrape every tick
+    // ignoring the back-off. For an account that already owns this task's row the
+    // arm upsert sets the same computed nextRunAt the runner writes back — idempotent.
+    arm.push({ kind: 'full-scrape', accountId, nextRunAt });
 
     // Arm child tasks for THIS account.
     arm.push({ kind: 'weather-sync', accountId, nextRunAt: now });
@@ -148,7 +165,12 @@ async function run(ctx: TaskContext): Promise<TaskResult> {
   // account wasn't among the discovered results (rare — e.g. an account was
   // unlinked), fall back to the last computed cadence or a gentle re-check.
   const nextRunAt = thisTaskNextRunAt ?? lastNextRunAt ?? new Date(now.getTime() + ERROR_BACKOFF_MS);
-  return { nextRunAt, status: 'SUCCESS', arm };
+  return {
+    nextRunAt,
+    status: 'SUCCESS',
+    arm,
+    metrics: { billsTotal, billsAdded, pdfsDownloaded, accountCount: results.length },
+  };
 }
 
 export const fullScrapeHandler: TaskHandler = { kind: 'full-scrape', portal: true, run };

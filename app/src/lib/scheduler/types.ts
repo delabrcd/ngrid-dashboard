@@ -19,11 +19,23 @@ export interface ScheduledTaskRow {
 
 export interface ArmSpec { kind: TaskKind; accountId: number | null; nextRunAt: Date; }
 
+// Scrape metrics a handler optionally reports so the runner can rebuild the
+// legacy ScrapeRun summary ("N account(s): X bills (Y new), Z PDFs fetched") and
+// write the real ScrapeRun.billsAdded the UI's recent-checks reads. Only
+// full-scrape currently populates these; the runner sums them across tasks.
+export interface TaskMetrics {
+  billsTotal?: number;
+  billsAdded?: number;
+  pdfsDownloaded?: number;
+  accountCount?: number;
+}
+
 export interface TaskResult {
   nextRunAt: Date | null;            // null = deactivate this task
   status: 'SUCCESS' | 'ERROR' | 'SKIPPED';
   reason?: string;
   arm?: ArmSpec[];                   // e.g. full-scrape arms weather/notify/pdf-fetch
+  metrics?: TaskMetrics;             // scrape counts folded into the ScrapeRun summary
 }
 
 export interface TaskContext {
