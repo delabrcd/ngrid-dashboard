@@ -33,7 +33,7 @@ import { ymdToYm } from '@/lib/range';
 // or the bill summary (bill) that the detail modal renders.
 interface LogItem {
   id: number;
-  kind: string; // 'bill' | 'anomaly'
+  kind: string; // 'bill' | 'anomaly' | 'scrape'
   key: string;
   title: string;
   message: string;
@@ -49,6 +49,15 @@ interface BillPayload {
   periodFrom?: string | null;
   periodTo?: string | null;
   hasPdf?: boolean;
+}
+
+// The scrape-sanity-floor shape stored in a 'scrape' row's payload (#135). Loosely
+// typed — every field is optional so a missing/old payload renders without crashing.
+interface ScrapePayload {
+  stream?: string;
+  prior?: number;
+  reason?: string;
+  ymd?: string;
 }
 
 export function NotificationsBell({
@@ -237,14 +246,14 @@ export function NotificationsBell({
                         isRead ? 'opacity-60' : ''
                       }`}
                     >
-                      {/* Tone dot: amber for anomalies (warning), sky for new-bill
-                          (info); a hollow ring once read. */}
+                      {/* Tone dot: amber for warnings (anomaly + scrape-gap), sky for
+                          new-bill (info); a hollow ring once read. */}
                       <span
                         aria-hidden
                         className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
                           isRead
                             ? 'border border-slate-600 bg-transparent'
-                            : n.kind === 'anomaly'
+                            : n.kind === 'anomaly' || n.kind === 'scrape'
                               ? 'bg-amber-400'
                               : 'bg-sky-400'
                         }`}
@@ -283,7 +292,12 @@ export function NotificationsBell({
           <AnomalyDetailBody flag={detail.payload as AnomalyFlag} onOpenCompare={onOpenCompare} onClose={() => setDetail(null)} />
         ) : detail?.kind === 'bill' ? (
           <BillDetailBody payload={detail.payload as BillPayload} bills={bills} rows={rows} />
-        ) : null}
+        ) : detail?.kind === 'scrape' ? (
+          <ScrapeDetailBody message={detail.message} payload={detail.payload as ScrapePayload} />
+        ) : (
+          // Generic fallback — never render a blank body for an unknown future kind.
+          <DefaultDetailBody message={detail?.message} />
+        )}
       </DetailModal>
     </div>
   );
@@ -334,6 +348,44 @@ function AnomalyDetailBody({
       ) : null}
     </div>
   );
+}
+
+// Scrape-sanity-floor body (#135) — pure presentation of a 'scrape' notification.
+// The human message, a compact factual breakdown from the payload (affected stream
+// + prior row count), and a "what this can mean" line steering the operator to
+// verify the account against the National Grid portal. Defensive: every payload
+// field is optional, so a missing field just renders an em dash.
+function ScrapeDetailBody({ message, payload }: { message: string; payload: ScrapePayload }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm leading-snug text-slate-200">{message}</p>
+      <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5 text-xs">
+        <dt className="text-slate-500">Affected stream</dt>
+        <dd className="text-right font-medium text-slate-100">{payload.stream ?? '—'}</dd>
+        <dt className="text-slate-500">Rows before this scrape</dt>
+        <dd className="text-right text-slate-300">{payload.prior != null ? num(payload.prior) : '—'}</dd>
+        <dt className="text-slate-500">Returned this scrape</dt>
+        <dd className="text-right text-slate-300">0</dd>
+        {payload.ymd ? (
+          <>
+            <dt className="text-slate-500">First flagged</dt>
+            <dd className="text-right text-slate-300">{payload.ymd}</dd>
+          </>
+        ) : null}
+      </dl>
+      <p className="rounded-lg border border-slate-800 bg-slate-800/40 p-2.5 text-xs leading-snug text-slate-300">
+        An established stream suddenly returned no rows. Existing data was preserved (nothing was
+        overwritten). This can mean National Grid renamed an upstream field — verify the account
+        against the National Grid portal and check for a scraper update.
+      </p>
+    </div>
+  );
+}
+
+// Generic fallback body — a minimal, never-blank detail for any kind without a
+// dedicated body (incl. future kinds). Shows just the stored message.
+function DefaultDetailBody({ message }: { message?: string }) {
+  return <p className="text-sm leading-snug text-slate-200">{message || 'No additional detail.'}</p>;
 }
 
 // ── Bill Recap helpers ────────────────────────────────────────────────────────
