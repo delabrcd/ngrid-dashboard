@@ -459,13 +459,30 @@ async function collectOneAccount(
     log('warning: no auth headers captured; skipping PDF download');
   }
 
-  // ---- smart-meter AMI interval reads (issue #76) -------------------------
-  // Pull recent interval usage from the amiadapter REST endpoint, reusing the
-  // captured auth headers (same gateway as the PDF download — no account-number
-  // header here, that's PDF-specific). PURELY observational: these rows NEVER
-  // feed billed-cost numbers (AGENTS.md rule #1). Good-guest (rule #4): AMI-gated
-  // per meter, ONE windowed request per meter per run, SEQUENTIAL, no retry storm.
-  // Fully try/catch-wrapped so an interval-fetch hiccup can never break a scrape.
+  // ---- smart-meter AMI interval reads (issue #76 / #121) ------------------
+  // Capture interval usage at BOTH grains, reusing the captured auth headers
+  // (same gateway as the PDF download — no account-number header here, that's
+  // PDF-specific). PURELY observational: these rows NEVER feed billed-cost
+  // numbers (AGENTS.md rule #1).
+  //
+  // Two coexisting sources per meter (issue #121):
+  //   (a) HOURLY gql backstop — ALWAYS run. The `amiEnergyUsages` query serves a
+  //       WIDE range for BOTH fuels (electric returns hourly here; gas only works
+  //       here), paged in ≤31-day chunks over the INTERVAL_WINDOW_DAYS window.
+  //       This is the gap-free continuous-hourly feed for every meter.
+  //   (b) 15-min REST overlay — BEST-EFFORT additional capture. The `amiadapter`
+  //       REST endpoint returns 15-minute electric reads but only for a SHORT
+  //       window (~2 days; it 400s on longer ranges, and gas 404s entirely). A
+  //       non-2xx here is fine — the gql backstop already covered the meter
+  //       hourly — so we skip silently with a log.
+  // The two grains share `IntervalUsage`'s unique key (which includes
+  // intervalSeconds: 900 vs 3600) and persist is a fill-only upsert, so storing
+  // both is safe and non-destructive; the read layer reconciles them.
+  //
+  // Good-guest (rule #4): AMI-gated per meter, SEQUENTIAL, bounded (one gql
+  // window-set + one short REST per meter per run), no retry storm, with the
+  // existing settle delays. Fully try/catch-wrapped — a failure of EITHER call
+  // can never break the scrape.
   const intervals: IntervalReadRow[] = [];
   try {
     const meters = extractAmiMeters(cap.account);
@@ -477,88 +494,99 @@ async function collectOneAccount(
       log('interval: no premise number; skipping interval fetch');
     } else {
       const windowDays = Number.parseInt(process.env.INTERVAL_WINDOW_DAYS || '', 10);
-      const startDateTime = backfillStartFor(
+      const effectiveWindowDays = Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 35;
+      // Short window for the 15-min REST overlay — kept small so the amiadapter
+      // endpoint actually returns 15-min reads (it 400s on a long range); the
+      // hourly gql above is the wide backstop. Default 2 days.
+      const restWindowParsed = Number.parseInt(process.env.INTERVAL_REST_WINDOW_DAYS || '', 10);
+      const restWindowDays = Number.isFinite(restWindowParsed) && restWindowParsed > 0 ? restWindowParsed : 2;
+      const restStartDateTime = backfillStartFor(
         new Date(),
         null, // lastStored unknown here; persist's upsert makes re-fetch idempotent
-        process.env.INTERVAL_BACKFILL_FROM,
-        Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 35
+        undefined, // the wide backfill is the gql's job; the REST overlay stays short
+        restWindowDays
       );
-      // Per-request span cap for the gql fallback (the gateway caps the range);
+      // Per-request span cap for the gql backstop (the gateway caps the range);
       // a wider backfill is paged in ≤ MAX_GQL_SPAN_DAYS chunks. The default tail
       // window is a single chunk.
       const MAX_GQL_SPAN_DAYS = 31;
       const DAY_MS = 24 * 60 * 60 * 1000;
-      const effectiveWindowDays = Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 35;
       for (const meter of meters) {
+        let gqlRows = 0;
+        let restRows = 0;
         try {
-          // 1) Electric REST first. Self-configuring: electric returns 200/15-min
-          //    here; gas 404s on this path and falls through to the gql replay.
-          const url = amiIntervalUrl(BASE, acct.premiseNumber, meter.servicePointNumber, startDateTime);
-          log(`interval: fetching ${meter.fuelType} reads (sp ${meter.servicePointNumber})`);
+          // 1) HOURLY gql backstop — ALWAYS run (both fuels). Window the
+          //    [dateFrom, dateTo] range and page it in ≤31-day chunks (sequential,
+          //    with the existing settle delay) so a wide backfill stays a good
+          //    guest. The default tail is a single window.
+          log(`interval: fetching ${meter.fuelType} hourly gql (sp ${meter.servicePointNumber})`);
+          const { dateFrom, dateTo } = intervalDateWindow(
+            new Date(),
+            process.env.INTERVAL_BACKFILL_FROM,
+            effectiveWindowDays
+          );
+          const fromMs = Date.parse(dateFrom);
+          const toMs = Date.parse(dateTo);
+          let chunkStart = Number.isFinite(fromMs) ? fromMs : toMs;
+          const endMs = Number.isFinite(toMs) ? toMs : chunkStart;
+          let chunks = 0;
+          while (chunkStart <= endMs) {
+            const chunkEnd = Math.min(chunkStart + MAX_GQL_SPAN_DAYS * DAY_MS, endMs);
+            const chunkFrom = fmtGqlDate(new Date(chunkStart));
+            const chunkTo = fmtGqlDate(new Date(chunkEnd));
+            const gqlResp = await ctx.request.post(`${BASE}/api/energyusage-cu-uwp-gql`, {
+              headers: { ...authHeaders, 'content-type': 'application/json' },
+              data: amiEnergyUsagesBody(meter, acct.premiseNumber, chunkFrom, chunkTo),
+              timeout: 30000,
+            });
+            if (gqlResp.ok()) {
+              const gjson = (await gqlResp.json().catch(() => null)) as {
+                data?: { amiEnergyUsages?: { nodes?: unknown } };
+              } | null;
+              const nodes = gjson?.data?.amiEnergyUsages?.nodes;
+              if (Array.isArray(nodes)) {
+                const rows = parseAmiEnergyUsages(
+                  nodes as Array<{ date: string; fuelType?: string; quantity: number }>,
+                  meter.fuelType
+                );
+                intervals.push(...rows);
+                gqlRows += rows.length;
+              } else {
+                log(`interval: ${meter.fuelType} gql ${chunkFrom}..${chunkTo} had no nodes`);
+              }
+            } else {
+              log(`interval: ${meter.fuelType} gql ${chunkFrom}..${chunkTo} HTTP ${gqlResp.status()}`);
+            }
+            chunks++;
+            if (chunkEnd >= endMs) break;
+            chunkStart = chunkEnd + DAY_MS;
+            // Settle between chunks (good guest).
+            await page.waitForTimeout(1500).catch(() => {});
+          }
+
+          // 2) 15-min REST overlay — best-effort. SHORT window so the amiadapter
+          //    endpoint returns 15-minute reads. A non-2xx (gas 404s; electric on
+          //    a bad range 400s) is expected and harmless: the gql above already
+          //    covered this meter hourly, so we skip silently with a log.
+          await page.waitForTimeout(1500).catch(() => {});
+          const url = amiIntervalUrl(BASE, acct.premiseNumber, meter.servicePointNumber, restStartDateTime);
           const r = await ctx.request.get(url, { headers: authHeaders, timeout: 30000 });
           if (r.ok()) {
             const json = await r.json().catch(() => null);
             if (Array.isArray(json)) {
               const rows = parseIntervalReads(json, meter.fuelType, unitForFuel(meter.fuelType));
               intervals.push(...rows);
-              log(`interval: ${rows.length} ${meter.fuelType} reads via REST since ${startDateTime}`);
+              restRows += rows.length;
             } else {
               log(`interval: ${meter.fuelType} REST response was not an array; skipping`);
             }
           } else {
-            // 2) Non-2xx on REST → gas gql fallback on the energy-usage gateway.
-            //    Window the [dateFrom, dateTo] range and page it in ≤31-day chunks
-            //    (sequential, with the existing settle delay) so a wide backfill
-            //    stays a good guest. The default tail is a single window.
-            log(`interval: ${meter.fuelType} REST returned HTTP ${r.status()}; trying energy-usage gql`);
-            const { dateFrom, dateTo } = intervalDateWindow(
-              new Date(),
-              process.env.INTERVAL_BACKFILL_FROM,
-              effectiveWindowDays
-            );
-            const fromMs = Date.parse(dateFrom);
-            const toMs = Date.parse(dateTo);
-            let gqlRows = 0;
-            let chunkStart = Number.isFinite(fromMs) ? fromMs : toMs;
-            const endMs = Number.isFinite(toMs) ? toMs : chunkStart;
-            let chunks = 0;
-            while (chunkStart <= endMs) {
-              const chunkEnd = Math.min(chunkStart + MAX_GQL_SPAN_DAYS * DAY_MS, endMs);
-              const chunkFrom = fmtGqlDate(new Date(chunkStart));
-              const chunkTo = fmtGqlDate(new Date(chunkEnd));
-              const gqlResp = await ctx.request.post(`${BASE}/api/energyusage-cu-uwp-gql`, {
-                headers: { ...authHeaders, 'content-type': 'application/json' },
-                data: amiEnergyUsagesBody(meter, acct.premiseNumber, chunkFrom, chunkTo),
-                timeout: 30000,
-              });
-              if (gqlResp.ok()) {
-                const gjson = (await gqlResp.json().catch(() => null)) as {
-                  data?: { amiEnergyUsages?: { nodes?: unknown } };
-                } | null;
-                const nodes = gjson?.data?.amiEnergyUsages?.nodes;
-                if (Array.isArray(nodes)) {
-                  const rows = parseAmiEnergyUsages(
-                    nodes as Array<{ date: string; fuelType?: string; quantity: number }>,
-                    meter.fuelType
-                  );
-                  intervals.push(...rows);
-                  gqlRows += rows.length;
-                } else {
-                  log(`interval: ${meter.fuelType} gql ${chunkFrom}..${chunkTo} had no nodes`);
-                }
-              } else {
-                log(`interval: ${meter.fuelType} gql ${chunkFrom}..${chunkTo} HTTP ${gqlResp.status()}`);
-              }
-              chunks++;
-              if (chunkEnd >= endMs) break;
-              chunkStart = chunkEnd + DAY_MS;
-              // Settle between chunks (good guest).
-              await page.waitForTimeout(1500).catch(() => {});
-            }
             log(
-              `interval: ${gqlRows} ${meter.fuelType} reads via gql (${chunks} chunk(s)) ${dateFrom}..${dateTo}`
+              `interval: ${meter.fuelType} 15-min REST HTTP ${r.status()} (expected for gas / long range) — hourly gql already captured this meter`
             );
           }
+
+          log(`interval: ${meter.fuelType} — 15-min REST ${restRows}, hourly gql ${gqlRows}`);
         } catch (err) {
           log(`interval: ${meter.fuelType} fetch failed: ${err instanceof Error ? err.message : String(err)}`);
         }
