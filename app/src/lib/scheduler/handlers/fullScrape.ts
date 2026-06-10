@@ -161,7 +161,11 @@ async function run(ctx: TaskContext): Promise<TaskResult> {
   // in the ScrapeRun summary message via metrics.warnings.
   const warnings: string[] = [];
   for (const result of results) {
-    const summary = await persist(result);
+    // Opt into the scrape sanity floor (issue #135): this is the ONLY caller that
+    // persists a full collect() result where bills/usage/costs were all genuinely
+    // fetched, so an established stream going to zero here really is suspect. The
+    // partial-persist callers (intervalPull/pdfFetch) deliberately leave it off.
+    const summary = await persist(result, { detectSanityFloor: true });
     const accountId = summary.accountId;
     billsTotal += summary.billsTotal;
     billsAdded += summary.billsAdded;

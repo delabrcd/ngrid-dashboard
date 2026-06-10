@@ -74,3 +74,39 @@ describe('detectSanityFloor (hand-calculated)', () => {
     expect(flags.map((f) => f.stream)).toEqual(['bills', 'usages', 'costs']);
   });
 });
+
+// Opt-in gating contract (the real regression risk, issue #135 follow-up).
+//
+// The detector itself is correct but DUMB: given prior>0 & incoming===0 it flags,
+// with no idea whether incoming===0 means "upstream broke" or "this caller simply
+// didn't fetch that stream". That distinction lives in the IMPURE shell: persist()
+// runs the detector ONLY when its caller opts in via `{ detectSanityFloor: true }`,
+// and only the full-scrape path (collect() fetched all three streams) opts in. The
+// partial-persist callers (intervalPull persists only intervals; pdfFetch always
+// persists usage:[]) leave it OFF, so their deliberately-empty streams never trip it.
+//
+// persist() is impure (DB), so we can't unit-test it hermetically here. What we CAN
+// lock is the very input that would mislead the detector if it ran on a partial
+// persist: an established account where a partial caller passed all three streams
+// empty produces THREE flags. That is exactly the spurious result the opt-in gating
+// suppresses — proving WHY persist() must never run the detector on a partial result.
+describe('opt-in gating contract (why partial persists must not run the detector)', () => {
+  it('an established account with all incoming 0 yields three flags — the spurious result gating prevents', () => {
+    // This mirrors what a partial persist (e.g. pdfFetch, which always passes
+    // usage:[]) WOULD feed the detector if it ran unconditionally: prior rows exist,
+    // incoming is 0 because the caller didn't fetch them — not because upstream broke.
+    const flags = detectSanityFloor(
+      counts({
+        bills: { prior: 27, incoming: 0 },
+        usages: { prior: 18, incoming: 0 },
+        costs: { prior: 54, incoming: 0 },
+      })
+    );
+    expect(flags.map((f) => f.stream)).toEqual(['bills', 'usages', 'costs']);
+    // Because this is a false alarm for a partial fetch, persist() defaults the
+    // sanity floor OFF and only the full-scrape path opts in. Partial callers
+    // (intervalPull/pdfFetch) call persist(result) with NO option, so the detector
+    // never sees these counts and the upsert loops run untouched. The wiring — not
+    // the detector — is what keeps these three streams from spuriously flagging.
+  });
+});
