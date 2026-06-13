@@ -27,12 +27,23 @@
 // so the chart stays smooth; the 15m resolution still only has the recent ~48h of
 // detail the API serves (older spans render at the hourly grain).
 //
+// ZOOM (issue #141): on TOP of the global range, the user can narrow into a
+// sub-span LOCALLY (a Recharts Brush at the chart foot) without mutating the
+// global RangeControl. When the brushed span is narrow enough — and meaningfully
+// smaller than what's currently fetched (shouldRefetchZoom) — the widget REFETCHES
+// /api/interval for just that span so the zoom shows finer (less server-
+// downsampled) detail rather than stretched decimated points. A "Reset zoom"
+// affordance returns to the global window. The zoom is per-widget ephemeral state
+// (lib/intervalZoom.ts holds the pure span/refetch math).
+//
 // GAPS: the chart uses connectNulls=false (the default) so real gaps in the
 // data (missing intervals — the API omits them) render as line breaks, NEVER
-// as fabricated zeros.
+// as fabricated zeros. This holds through zoom + refetch (the refetch path runs
+// the same toHistoryPoints shaper, which drops gaps).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Brush,
   CartesianGrid,
   Line,
   LineChart,
@@ -42,7 +53,8 @@ import {
   YAxis,
 } from 'recharts';
 import { reconcileToHourly, type IntervalProfileRow } from '@/lib/intervalProfile';
-import { toHistoryPoints } from '@/lib/intervalHistory';
+import { toHistoryPoints, type HistoryPoint } from '@/lib/intervalHistory';
+import { shouldRefetchZoom, zoomSpanToRange } from '@/lib/intervalZoom';
 import { ChartShell } from '../ChartShell';
 
 // ---- Theme constants (mirrors IntervalLoadShape) ----------------------------
@@ -55,6 +67,15 @@ const tooltipStyle = {
   fontSize: 12,
 } as const;
 const axisStyle = { stroke: '#475569', fontSize: 11 } as const;
+
+// ---- Zoom-refetch tuning ----------------------------------------------------
+// A brushed span is refetched for finer detail when it is ≤ ZOOM_MAX_SPAN_DAYS
+// wide AND ≤ ZOOM_SHRINK_RATIO of the currently-fetched span (see
+// lib/intervalZoom.shouldRefetchZoom). 14 days bounds the refetch payload while
+// still covering a typical "zoom into a week or two" gesture; 0.5 means the zoom
+// must at least halve the window to be worth a refetch.
+const ZOOM_MAX_SPAN_DAYS = 14;
+const ZOOM_SHRINK_RATIO = 0.5;
 
 // ---- Types ------------------------------------------------------------------
 type Fuel = 'ELECTRIC' | 'GAS';
@@ -69,6 +90,11 @@ const FUEL_UNIT: Record<Fuel, string> = { ELECTRIC: 'kWh', GAS: 'therms' };
 type IntervalApiRow = IntervalProfileRow & { fuelType?: string; unit?: string };
 
 type LoadState = { rows: IntervalApiRow[] } | { error: true } | undefined;
+
+// A locally-zoomed window: the day bounds we refetched for finer detail, plus the
+// raw ms span the user brushed (so the reset/label can describe it). Ephemeral
+// per-widget state — it never touches the global RangeControl.
+type Zoom = { from: string; to: string; startMs: number; endMs: number };
 
 // ---- Segmented toggle -------------------------------------------------------
 // A reusable generic segmented control (mirrors the toggle in IntervalLoadShape).
@@ -168,6 +194,9 @@ export function IntervalHistory({
   const [fuel, setFuel] = useState<Fuel>('ELECTRIC');
   const [resolution, setResolution] = useState<Resolution>('1h');
   const [state, setState] = useState<LoadState>(undefined);
+  // The locally-zoomed window (issue #141). When set, the widget has refetched
+  // /api/interval for [zoom.from, zoom.to] (finer detail) and renders that span.
+  const [zoom, setZoom] = useState<Zoom | null>(null);
 
   // Gas has no 15-min data → disable the 15m option when fuel=Gas.
   // If the user switches to Gas while on 15m, fall back to 1h.
@@ -184,17 +213,31 @@ export function IntervalHistory({
     }
   }, [fuel, resolution]);
 
-  // Fetch on mount + whenever controls or account change. Track an `alive` flag
-  // so a stale response (the user changed a control mid-flight) can't overwrite
-  // the current one.
+  // The window actually fetched: the zoomed span when zoomed, else the global one.
+  const fetchFrom = zoom ? zoom.from : from;
+  const fetchTo = zoom ? zoom.to : to;
+
+  // Drop any active zoom whenever the fuel, the account, or the GLOBAL range
+  // changes — a zoom into the old context would be stale (the reset is then a
+  // no-op the next fetch already reflects). Resolution does NOT clear the zoom
+  // (the user may be zooming specifically to inspect 15m detail).
+  useEffect(() => {
+    setZoom(null);
+  }, [fuel, from, to, accountId]);
+
+  // Fetch on mount + whenever controls, account, or the (possibly zoomed) window
+  // change. Track an `alive` flag so a stale response (the user changed a control
+  // mid-flight) can't overwrite the current one.
   useEffect(() => {
     let alive = true;
     setState(undefined);
     const acctQuery = accountId != null ? `&accountId=${accountId}` : '';
-    // Follow the GLOBAL range when supplied; otherwise let the route default to its
-    // trailing window (non-dashboard caller). Server-side downsampling keeps the
-    // returned series bounded (≤ MAX_POINTS) no matter how wide the window is.
-    const rangeQuery = from && to ? `&from=${from}&to=${to}` : '';
+    // Follow the zoomed span when zoomed, else the GLOBAL range; otherwise let the
+    // route default to its trailing window (non-dashboard caller). Server-side
+    // downsampling keeps the returned series bounded (≤ MAX_POINTS) no matter how
+    // wide the window is — but a narrow zoom span fits under the cap, so it comes
+    // back at (or near) the finest available grain.
+    const rangeQuery = fetchFrom && fetchTo ? `&from=${fetchFrom}&to=${fetchTo}` : '';
     fetch(`/api/interval?fuel=${fuel}${rangeQuery}${acctQuery}`)
       .then((r) => r.json())
       .then((j) => {
@@ -207,7 +250,7 @@ export function IntervalHistory({
     return () => {
       alive = false;
     };
-  }, [fuel, from, to, accountId]);
+  }, [fuel, fetchFrom, fetchTo, accountId]);
 
   const color = fuel === 'GAS' ? GAS : ELEC;
   const unit = FUEL_UNIT[fuel];
@@ -217,7 +260,7 @@ export function IntervalHistory({
   // For 15m: filter to intervalSeconds=900 only, then toHistoryPoints.
   // Missing rows = missing points (no zeros fabricated — connectNulls=false means
   // gaps render as line breaks in the chart, the correct behavior).
-  const data = useMemo(() => {
+  const data: HistoryPoint[] = useMemo(() => {
     if (!state || 'error' in state) return [];
     if (effectiveResolution === '1h') {
       return toHistoryPoints(reconcileToHourly(state.rows));
@@ -232,9 +275,52 @@ export function IntervalHistory({
   const errored = !!state && 'error' in state;
   const empty = !loading && !errored && data.length === 0;
 
-  // Subtitle: e.g. "Electric · kWh · 1h" (the time window now follows the global
-  // RangeControl, shown in the dashboard header, so it isn't repeated here).
-  const subtitle = `${FUEL_LABEL[fuel]} · ${unit} · ${effectiveResolution}`;
+  // The ms span currently FETCHED, derived from the rendered points (the first and
+  // last point). Used as the baseline shouldRefetchZoom compares a brush against.
+  const fetchedSpan = useMemo(() => {
+    if (data.length < 2) return null;
+    return { fromMs: data[0].ts, toMs: data[data.length - 1].ts };
+  }, [data]);
+
+  // Brush-end handler: the user moved the foot navigator. Recharts gives us the
+  // selected start/end indices into `data`; we translate those to the brushed ms
+  // span and, if it warrants finer detail (pure shouldRefetchZoom), set a zoom so
+  // the fetch effect refetches /api/interval for just that span. A brush that
+  // isn't narrow enough leaves `zoom` alone (the visual brush still narrows the
+  // view; we just don't pay for a refetch).
+  const onBrushChange = useCallback(
+    (range: { startIndex?: number; endIndex?: number }) => {
+      if (!fetchedSpan) return;
+      const s = range.startIndex;
+      const e = range.endIndex;
+      if (s == null || e == null || s >= e) return;
+      const startMs = data[s]?.ts;
+      const endMs = data[e]?.ts;
+      if (startMs == null || endMs == null) return;
+      if (
+        shouldRefetchZoom(startMs, endMs, fetchedSpan.fromMs, fetchedSpan.toMs, {
+          maxSpanDays: ZOOM_MAX_SPAN_DAYS,
+          shrinkRatio: ZOOM_SHRINK_RATIO,
+        })
+      ) {
+        const { from: zf, to: zt } = zoomSpanToRange(startMs, endMs);
+        // Avoid a redundant refetch if we're already zoomed to that exact span.
+        setZoom((prev) =>
+          prev && prev.from === zf && prev.to === zt ? prev : { from: zf, to: zt, startMs, endMs },
+        );
+      }
+    },
+    [data, fetchedSpan],
+  );
+
+  const resetZoom = useCallback(() => setZoom(null), []);
+
+  // Subtitle: e.g. "Electric · kWh · 1h" (the global time window is shown in the
+  // dashboard header). When zoomed, append the local span so it's clear the chart
+  // is showing a narrowed, finer-detail view.
+  const subtitle = `${FUEL_LABEL[fuel]} · ${unit} · ${effectiveResolution}${
+    zoom ? ` · zoomed ${zoom.from} → ${zoom.to}` : ''
+  }`;
 
   // Empty-state message: distinguish "no data at all" from "no data at this grain".
   const emptyMsg =
@@ -245,7 +331,18 @@ export function IntervalHistory({
   // The chart body (render-prop for ChartShell): keeps the loading/empty/errored
   // states and the Recharts tree, drawn into the height ChartShell supplies.
   const renderBody = (h: number | string) => (
-    <div style={{ height: h }} className="w-full">
+    <div style={{ height: h }} className="relative w-full">
+      {/* Reset-zoom affordance (issue #141): overlaid top-left, shown only when a
+          local zoom is active. Returns to the global RangeControl window. */}
+      {zoom && !loading && !errored && (
+        <button
+          onClick={resetZoom}
+          title="Reset zoom to the dashboard range"
+          className="absolute left-1 top-1 z-10 rounded-md border border-slate-700 bg-slate-900/80 px-2 py-0.5 text-[11px] text-slate-200 backdrop-blur transition hover:bg-slate-700"
+        >
+          Reset zoom
+        </button>
+      )}
       {loading ? (
         <div className="flex h-full w-full items-center justify-center">
           <div className="h-full w-full animate-pulse rounded-lg bg-slate-800/40" />
@@ -295,6 +392,18 @@ export function IntervalHistory({
                 dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
+              />
+              {/* Brush (issue #141): the drag-to-zoom navigator. Dragging the
+                  handles narrows the view; when the selected span is narrow enough
+                  (onBrushChange → shouldRefetchZoom) the widget refetches that span
+                  for finer detail. `dataKey="label"` matches the XAxis. */}
+              <Brush
+                dataKey="label"
+                height={18}
+                travellerWidth={8}
+                stroke="#475569"
+                fill="#0f172a"
+                onChange={onBrushChange}
               />
             </LineChart>
           </ResponsiveContainer>
