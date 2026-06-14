@@ -2,16 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   msToYmd,
   zoomSpanToRange,
-  shouldRefetchZoom,
-  clampBrushIndices,
+  isZoomSelectionSignificant,
 } from '../src/lib/intervalZoom';
 
 // Hand-calculated tests for the PURE interval-zoom helpers (issue #141). The
-// helpers map a brushed span to /api/interval day bounds and decide whether a
-// zoom warrants a finer-detail refetch. NO infra — pure number/string math.
+// helpers map a drag-selected span to /api/interval day bounds and decide whether
+// a drag is deliberate enough to zoom (vs an accidental click). NO infra — pure
+// number/string math.
 
-const DAY = 86_400_000;
 const HOUR = 3_600_000;
+const MINUTE = 60_000;
 
 describe('msToYmd (hand-calculated)', () => {
   it('formats an epoch-ms instant as its UTC calendar day', () => {
@@ -50,94 +50,40 @@ describe('zoomSpanToRange (hand-calculated)', () => {
   });
 });
 
-describe('shouldRefetchZoom (hand-calculated)', () => {
-  const opts = { maxSpanDays: 14, shrinkRatio: 0.5 };
-  // A fetched window of 60 days; pick zoom spans relative to it.
-  const fFrom = Date.UTC(2026, 4, 1, 0, 0, 0);
-  const fTo = fFrom + 60 * DAY;
+describe('isZoomSelectionSignificant (hand-calculated)', () => {
+  // Minimum deliberate-drag span: 30 minutes (two adjacent 15-min points jittered
+  // under a click should NOT zoom; a genuine drag across ≥30 min does).
+  const MIN = 30 * MINUTE;
+  const base = Date.UTC(2026, 5, 8, 6, 0, 0);
 
-  it('refetches a narrow span well inside the fetched window', () => {
-    // 3-day zoom: 3 ≤ 14 (span guard) AND 3 ≤ 60*0.5=30 (shrink guard) → refetch.
-    const start = fFrom + 10 * DAY;
-    const end = start + 3 * DAY;
-    expect(shouldRefetchZoom(start, end, fFrom, fTo, opts)).toBe(true);
+  it('zooms a deliberate multi-hour drag across distinct indices', () => {
+    // indices 10≠40, span 6h ≥ 30min → significant.
+    expect(isZoomSelectionSignificant(10, 40, base, base + 6 * HOUR, MIN)).toBe(true);
   });
 
-  it('does NOT refetch a span wider than maxSpanDays even if it shrinks the window', () => {
-    // 20-day zoom: 20 > 14 (span guard fails) → no refetch, despite 20 ≤ 30.
-    const start = fFrom + 5 * DAY;
-    const end = start + 20 * DAY;
-    expect(shouldRefetchZoom(start, end, fFrom, fTo, opts)).toBe(false);
+  it('rejects a click (same index on down and up)', () => {
+    // A single click lands both endpoints on index 25 → not significant even if
+    // the ms happened to differ.
+    expect(isZoomSelectionSignificant(25, 25, base, base + HOUR, MIN)).toBe(false);
   });
 
-  it('does NOT refetch when the zoom is ~the whole fetched window (shrink guard)', () => {
-    // Fetched window only 6 days wide; a 5-day zoom: 5 ≤ 14 (span ok) but
-    // 5 > 6*0.5=3 (shrink guard fails) → no refetch (no extra detail to gain).
-    const narrowFrom = fFrom;
-    const narrowTo = fFrom + 6 * DAY;
-    const start = narrowFrom + HOUR;
-    const end = start + 5 * DAY;
-    expect(shouldRefetchZoom(start, end, narrowFrom, narrowTo, opts)).toBe(false);
+  it('rejects a sub-minimum jitter-drag across adjacent points', () => {
+    // indices differ (12 vs 13) but only 15 min apart < 30 min → not significant.
+    expect(isZoomSelectionSignificant(12, 13, base, base + 15 * MINUTE, MIN)).toBe(false);
   });
 
-  it('refetches at exactly the maxSpanDays boundary (inclusive)', () => {
-    // 14-day zoom inside a 60-day window: 14 ≤ 14 AND 14 ≤ 30 → refetch.
-    const start = fFrom;
-    const end = fFrom + 14 * DAY;
-    expect(shouldRefetchZoom(start, end, fFrom, fTo, opts)).toBe(true);
+  it('zooms at exactly the minimum span (inclusive boundary)', () => {
+    // indices differ and span == 30 min == MIN → significant.
+    expect(isZoomSelectionSignificant(12, 14, base, base + 30 * MINUTE, MIN)).toBe(true);
   });
 
-  it('returns false for a degenerate (zero-width) zoom span', () => {
-    const start = fFrom + 10 * DAY;
-    expect(shouldRefetchZoom(start, start, fFrom, fTo, opts)).toBe(false);
+  it('is order-independent (a backwards drag is still significant)', () => {
+    // end index < start index, end ms < start ms; abs span 6h ≥ 30min → significant.
+    expect(isZoomSelectionSignificant(40, 10, base + 6 * HOUR, base, MIN)).toBe(true);
   });
 
-  it('returns false for a degenerate fetched window', () => {
-    const start = fFrom;
-    const end = fFrom + 2 * DAY;
-    expect(shouldRefetchZoom(start, end, fFrom, fFrom, opts)).toBe(false);
-  });
-});
-
-describe('clampBrushIndices (hand-calculated)', () => {
-  it('passes through an in-bounds, ordered pair unchanged', () => {
-    // 100-point series, selecting indices 10..40 → unchanged.
-    expect(clampBrushIndices(10, 40, 100)).toEqual({ startIndex: 10, endIndex: 40 });
-  });
-
-  it('clamps an end index past the last point to the last index', () => {
-    // 50 points → last index 49; an end of 80 clamps to 49.
-    expect(clampBrushIndices(10, 80, 50)).toEqual({ startIndex: 10, endIndex: 49 });
-  });
-
-  it('clamps a negative start to 0', () => {
-    expect(clampBrushIndices(-5, 20, 50)).toEqual({ startIndex: 0, endIndex: 20 });
-  });
-
-  it('orders a reversed pair so start ≤ end', () => {
-    expect(clampBrushIndices(40, 10, 100)).toEqual({ startIndex: 10, endIndex: 40 });
-  });
-
-  it('spans the whole series for the full-range request', () => {
-    // 30 points → [0, 29].
-    expect(clampBrushIndices(0, 29, 30)).toEqual({ startIndex: 0, endIndex: 29 });
-  });
-
-  it('returns [0,0] for an empty series', () => {
-    expect(clampBrushIndices(0, 5, 0)).toEqual({ startIndex: 0, endIndex: 0 });
-  });
-
-  it('collapses to the single valid index for a one-point series', () => {
-    // len 1 → last index 0; any inputs clamp to [0, 0].
-    expect(clampBrushIndices(0, 9, 1)).toEqual({ startIndex: 0, endIndex: 0 });
-  });
-
-  it('normalizes non-finite inputs to the endpoints (start→0, end→last)', () => {
-    // NaN start → 0; NaN end → last (len-1 = 19).
-    expect(clampBrushIndices(NaN, NaN, 20)).toEqual({ startIndex: 0, endIndex: 19 });
-  });
-
-  it('rounds fractional indices to the nearest integer', () => {
-    expect(clampBrushIndices(2.4, 7.6, 100)).toEqual({ startIndex: 2, endIndex: 8 });
+  it('rejects non-finite endpoints', () => {
+    expect(isZoomSelectionSignificant(NaN, 10, base, base + HOUR, MIN)).toBe(false);
+    expect(isZoomSelectionSignificant(0, 10, NaN, base + HOUR, MIN)).toBe(false);
   });
 });
