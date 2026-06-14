@@ -28,35 +28,42 @@
 // detail the API serves (older spans render at the hourly grain).
 //
 // ZOOM (issue #141): on TOP of the global range, the user can narrow into a
-// sub-span LOCALLY (a Recharts Brush at the chart foot) without mutating the
-// global RangeControl. The brush is a CONTROLLED component — its [startIndex,
-// endIndex] live in React state and are passed back to <Brush>; every onChange
-// just updates those indices, so Recharts zooms the main chart to the selection
-// SMOOTHLY with NO data change (this is what fixes the #141 snap-back: an
-// uncontrolled brush + a mid-drag refetch reset the brush to the full range).
+// sub-span LOCALLY by DRAG-SELECTING a band across the chart (the classic
+// stock-chart gesture) without mutating the global RangeControl. We listen to the
+// Recharts LineChart mouse handlers: onMouseDown records the start x, onMouseMove
+// (while dragging) updates the current x, onMouseUp commits. The in-progress band
+// is drawn with a <ReferenceArea>. On commit, the two selected x positions map to
+// their data points' ts and become the zoom window; we refetch /api/interval for
+// just that span (finer, less server-downsampled detail).
 //
-// The finer-detail refetch is DECOUPLED from the visual zoom and DEBOUNCED: only
-// ~ZOOM_DEBOUNCE_MS after the drag settles do we (if the span is narrow enough —
-// shouldRefetchZoom) REFETCH /api/interval for just that span to show finer (less
-// server-downsampled) detail. The refetch swaps the rows IN PLACE — it never
-// blanks the chart to the loading skeleton (only the fuel/account/global-range
-// load does that) — and on arrival the controlled brush is reconciled to span
-// the new (zoomed) data, so the view stays put: no flash, no jump, no snap.
+// WHY DRAG-SELECT, NOT A BRUSH: the previous design used a Recharts <Brush> whose
+// handle sub-selects the loaded data. When a narrow drag refetched finer data, the
+// new data WAS that span, so the handle had nothing left to sub-select and reset
+// to full width — the user saw the chart "snap back to the start" (intermittently,
+// "every other drag"). A drag-select gesture has no persistent handle, so there is
+// nothing that can snap: each drag simply commits a new zoom and refetches.
 //
-// A "Reset zoom" affordance returns to the global window. The zoom is per-widget
-// ephemeral state (lib/intervalZoom.ts holds the pure span/refetch/index math).
+// The refetch swaps the rows IN PLACE — it never blanks the chart to the loading
+// skeleton (only the fuel/account/global-range load does that). Dragging again on
+// the zoomed chart zooms FURTHER (refetch for the new, narrower span). A "Reset
+// zoom" affordance returns to the global window. The zoom is per-widget ephemeral
+// state (lib/intervalZoom.ts holds the pure span/selection math).
 //
-// GAPS: the chart uses connectNulls=false (the default) so real gaps in the
-// data (missing intervals — the API omits them) render as line breaks, NEVER
-// as fabricated zeros. This holds through zoom + refetch (the refetch path runs
-// the same toHistoryPoints shaper, which drops gaps).
+// CLICK vs DRAG: a single click (mouse-down + mouse-up on essentially the same
+// spot) must NOT zoom. We require a deliberate selection — distinct data indices
+// AND a minimum ms span (isZoomSelectionSignificant) — before committing.
+//
+// GAPS: the chart uses connectNulls={false} so real gaps in the data (missing
+// intervals — the API omits them) render as line breaks, NEVER as fabricated
+// zeros. This holds through zoom + refetch (the refetch path runs the same
+// toHistoryPoints shaper, which drops gaps).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Brush,
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -64,7 +71,7 @@ import {
 } from 'recharts';
 import { reconcileToHourly, type IntervalProfileRow } from '@/lib/intervalProfile';
 import { toHistoryPoints, type HistoryPoint } from '@/lib/intervalHistory';
-import { clampBrushIndices, shouldRefetchZoom, zoomSpanToRange } from '@/lib/intervalZoom';
+import { isZoomSelectionSignificant, zoomSpanToRange } from '@/lib/intervalZoom';
 import { ChartShell } from '../ChartShell';
 
 // ---- Theme constants (mirrors IntervalLoadShape) ----------------------------
@@ -78,20 +85,13 @@ const tooltipStyle = {
 } as const;
 const axisStyle = { stroke: '#475569', fontSize: 11 } as const;
 
-// ---- Zoom-refetch tuning ----------------------------------------------------
-// A brushed span is refetched for finer detail when it is ≤ ZOOM_MAX_SPAN_DAYS
-// wide AND ≤ ZOOM_SHRINK_RATIO of the currently-fetched span (see
-// lib/intervalZoom.shouldRefetchZoom). 14 days bounds the refetch payload while
-// still covering a typical "zoom into a week or two" gesture; 0.5 means the zoom
-// must at least halve the window to be worth a refetch.
-const ZOOM_MAX_SPAN_DAYS = 14;
-const ZOOM_SHRINK_RATIO = 0.5;
-// How long after the LAST brush onChange we wait before firing the finer-detail
-// refetch. The refetch is deferred to after the drag settles so it never yanks
-// the data out from under an active drag (the #141 snap-back). 350ms is long
-// enough to coalesce a continuous drag into one fetch, short enough to feel
-// responsive once the user lets go.
-const ZOOM_DEBOUNCE_MS = 350;
+// ---- Zoom tuning ------------------------------------------------------------
+// Minimum deliberate drag span (issue #141). A drag-select must cover at least
+// this much wall-clock time before it commits a zoom; anything narrower (a click,
+// or a jitter across two adjacent points) is ignored. 30 minutes is below the 1h
+// grain so any genuine drag of more than ~one point zooms, but a stray click on a
+// single point does not. See lib/intervalZoom.isZoomSelectionSignificant.
+const ZOOM_MIN_SPAN_MS = 30 * 60_000;
 
 // ---- Types ------------------------------------------------------------------
 type Fuel = 'ELECTRIC' | 'GAS';
@@ -108,9 +108,15 @@ type IntervalApiRow = IntervalProfileRow & { fuelType?: string; unit?: string };
 type LoadState = { rows: IntervalApiRow[] } | { error: true } | undefined;
 
 // A locally-zoomed window: the day bounds we refetched for finer detail, plus the
-// raw ms span the user brushed (so the reset/label can describe it). Ephemeral
+// raw ms span the user selected (so the reset/label can describe it). Ephemeral
 // per-widget state — it never touches the global RangeControl.
 type Zoom = { from: string; to: string; startMs: number; endMs: number };
+
+// An in-progress drag-select on the main chart: the activeLabel (XAxis category
+// value) under the mouse-down and the current mouse position. Both are the
+// `dataKey="label"` strings Recharts reports as `e.activeLabel`. While this is
+// non-null and `refX2` differs from `refX1`, we draw the selection band.
+type DragSel = { refX1: string; refX2: string | null };
 
 // ---- Segmented toggle -------------------------------------------------------
 // A reusable generic segmented control (mirrors the toggle in IntervalLoadShape).
@@ -213,21 +219,10 @@ export function IntervalHistory({
   // The locally-zoomed window (issue #141). When set, the widget has refetched
   // /api/interval for [zoom.from, zoom.to] (finer detail) and renders that span.
   const [zoom, setZoom] = useState<Zoom | null>(null);
-  // The CONTROLLED brush selection (issue #141): indices into the rendered
-  // `data`. `null` means "no explicit selection" → the brush spans the full
-  // series. Driving these from state (vs an uncontrolled brush) is what keeps a
-  // drag from snapping back: onChange updates them, Recharts zooms smoothly, and
-  // the data underneath never changes mid-drag.
-  const [brush, setBrush] = useState<{ startIndex: number; endIndex: number } | null>(null);
-  // After a finer-detail refetch lands, the new `data` IS the zoomed span — so the
-  // controlled brush should span the WHOLE new series, keeping the view on that
-  // span (no jump/snap). This ref flags "the next data arrival was caused by a
-  // zoom refetch; reconcile the brush to full range when it lands."
-  const reconcileBrushRef = useRef(false);
-  // A debounce timer for the finer-detail refetch (issue #141): the visual zoom
-  // updates instantly via the controlled brush; the refetch is deferred until the
-  // drag settles so it never disturbs an active drag.
-  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The in-progress drag-selection (issue #141). Non-null between onMouseDown and
+  // onMouseUp; drives the <ReferenceArea> band. Committed (or discarded) on mouse
+  // up, then cleared.
+  const [drag, setDrag] = useState<DragSel | null>(null);
 
   // Gas has no 15-min data → disable the 15m option when fuel=Gas.
   // If the user switches to Gas while on 15m, fall back to 1h.
@@ -248,18 +243,18 @@ export function IntervalHistory({
   const fetchFrom = zoom ? zoom.from : from;
   const fetchTo = zoom ? zoom.to : to;
 
-  // Drop any active zoom (and the brush selection) whenever the fuel, the
+  // Drop any active zoom (and any in-progress drag) whenever the fuel, the
   // account, or the GLOBAL range changes — a zoom into the old context would be
   // stale (the reset is then a no-op the next fetch already reflects). Resolution
   // does NOT clear the zoom (the user may be zooming specifically to inspect 15m
-  // detail), but it DOES drop the brush selection: switching 1h↔15m changes the
-  // point count, so the old indices no longer map to the same span.
+  // detail); we just abandon any in-progress drag so a stale band can't commit
+  // against the new grain.
   useEffect(() => {
     setZoom(null);
-    setBrush(null);
+    setDrag(null);
   }, [fuel, from, to, accountId]);
   useEffect(() => {
-    setBrush(null);
+    setDrag(null);
   }, [effectiveResolution]);
 
   // To decide whether a given fetch should show the loading skeleton, we track
@@ -324,110 +319,68 @@ export function IntervalHistory({
   const errored = !!state && 'error' in state;
   const empty = !loading && !errored && data.length === 0;
 
-  // Reconcile the CONTROLLED brush whenever `data` changes (issue #141):
-  //   • If a zoom refetch just landed (reconcileBrushRef), the new `data` IS the
-  //     zoomed span → span the WHOLE new series so the view stays on that span.
-  //   • Otherwise, if an existing selection now falls out of bounds (e.g. a
-  //     resolution change shrank the series), clamp it back into range; a brush
-  //     spanning the full series collapses to "no selection" (null) so the
-  //     overview shows the whole window.
-  // Depends on `data` ONLY (the reconciliation is a response to the series
-  // changing). The current `brush` is read inside the functional `setBrush`
-  // updater rather than via a closure capture, so we don't need it in the deps and
-  // the reconciliation can't re-trigger itself when it updates the brush.
-  const len = data.length;
-  useEffect(() => {
-    const reconcile = reconcileBrushRef.current;
-    reconcileBrushRef.current = false;
-    setBrush((prev) => {
-      if (len === 0) return null;
-      const last = len - 1;
-      // A zoom refetch just landed: the new data IS the zoomed span → span it all.
-      if (reconcile) {
-        return prev && prev.startIndex === 0 && prev.endIndex === last
-          ? prev
-          : { startIndex: 0, endIndex: last };
-      }
-      if (!prev) return prev;
-      // Full-range selection → drop to null (overview, no zoom box).
-      if (prev.startIndex <= 0 && prev.endIndex >= last) return null;
-      const clamped = clampBrushIndices(prev.startIndex, prev.endIndex, len);
-      return clamped.startIndex === prev.startIndex && clamped.endIndex === prev.endIndex
-        ? prev
-        : clamped;
+  // Look up a rendered point's ts (epoch-ms) + index by its XAxis label. The drag
+  // handlers receive `e.activeLabel` (the category value, i.e. our `label`); we map
+  // it back to the underlying point. A Map keeps the lookup O(1) per move event.
+  const pointByLabel = useMemo(() => {
+    const m = new Map<string, { ts: number; index: number }>();
+    data.forEach((p, i) => {
+      // Labels are unique per point in practice (distinct minute timestamps); if a
+      // duplicate ever occurs the first wins, which is fine for span endpoints.
+      if (!m.has(p.label)) m.set(p.label, { ts: p.ts, index: i });
     });
-  }, [len]);
-
-  // The ms span currently FETCHED, derived from the rendered points (the first and
-  // last point). Used as the baseline shouldRefetchZoom compares a brush against.
-  const fetchedSpan = useMemo(() => {
-    if (data.length < 2) return null;
-    return { fromMs: data[0].ts, toMs: data[data.length - 1].ts };
+    return m;
   }, [data]);
 
-  // Brush handler: the user is dragging the foot navigator. Recharts gives us the
-  // selected start/end indices into `data`. We (1) update the CONTROLLED brush
-  // immediately so the chart zooms smoothly with no data change (the snap-back
-  // fix), and (2) DEBOUNCE a finer-detail decision: only after the drag settles,
-  // if the brushed span warrants it (pure shouldRefetchZoom), set a zoom so the
-  // fetch effect refetches /api/interval for just that span. A brush that isn't
-  // narrow enough leaves `zoom` alone (the visual brush still narrows the view; we
-  // just don't pay for a refetch).
-  const onBrushChange = useCallback(
-    (range: { startIndex?: number; endIndex?: number }) => {
-      const s = range.startIndex;
-      const e = range.endIndex;
-      if (s == null || e == null) return;
-      // 1) Visual zoom — update the controlled brush right away (clamped/ordered).
-      const next = clampBrushIndices(s, e, data.length);
-      setBrush((prev) =>
-        prev && prev.startIndex === next.startIndex && prev.endIndex === next.endIndex
-          ? prev
-          : next,
-      );
-      // 2) Debounced finer-detail refetch — evaluated against the SETTLED span.
-      if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
-      refetchTimerRef.current = setTimeout(() => {
-        refetchTimerRef.current = null;
-        if (!fetchedSpan) return;
-        if (next.startIndex >= next.endIndex) return;
-        const startMs = data[next.startIndex]?.ts;
-        const endMs = data[next.endIndex]?.ts;
-        if (startMs == null || endMs == null) return;
-        if (
-          shouldRefetchZoom(startMs, endMs, fetchedSpan.fromMs, fetchedSpan.toMs, {
-            maxSpanDays: ZOOM_MAX_SPAN_DAYS,
-            shrinkRatio: ZOOM_SHRINK_RATIO,
-          })
-        ) {
-          const { from: zf, to: zt } = zoomSpanToRange(startMs, endMs);
-          // Avoid a redundant refetch if we're already zoomed to that exact span.
-          setZoom((prev) => {
-            if (prev && prev.from === zf && prev.to === zt) return prev;
-            reconcileBrushRef.current = true;
-            return { from: zf, to: zt, startMs, endMs };
-          });
-        }
-      }, ZOOM_DEBOUNCE_MS);
-    },
-    [data, fetchedSpan],
-  );
-
-  // Clean up a pending debounce timer on unmount (avoid a stray setState).
-  useEffect(() => {
-    return () => {
-      if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
-    };
+  // ---- Drag-to-select-zoom handlers (issue #141) ----------------------------
+  // Recharts reports the category under the cursor as `e.activeLabel`. We record
+  // it on mouse-down, track it on mouse-move while a drag is active, and on
+  // mouse-up map the two labels to their points' ts and (if the selection is
+  // deliberate) commit a zoom that refetches the finer span.
+  const onChartMouseDown = useCallback((e: { activeLabel?: string | number } | null) => {
+    const label = e?.activeLabel;
+    if (label == null) return;
+    setDrag({ refX1: String(label), refX2: null });
   }, []);
 
+  const onChartMouseMove = useCallback(
+    (e: { activeLabel?: string | number } | null) => {
+      // Only track while a drag is in progress (mouse-down happened on the chart).
+      if (!drag) return;
+      const label = e?.activeLabel;
+      if (label == null) return;
+      const next = String(label);
+      setDrag((prev) => (prev && prev.refX2 !== next ? { ...prev, refX2: next } : prev));
+    },
+    [drag],
+  );
+
+  const commitDrag = useCallback(() => {
+    setDrag((sel) => {
+      // Always clear the band on mouse-up/leave; only commit a zoom for a real
+      // selection (distinct, deliberate span — a click is ignored).
+      if (!sel || sel.refX2 == null || sel.refX2 === sel.refX1) return null;
+      const a = pointByLabel.get(sel.refX1);
+      const b = pointByLabel.get(sel.refX2);
+      if (!a || !b) return null;
+      if (
+        !isZoomSelectionSignificant(a.index, b.index, a.ts, b.ts, ZOOM_MIN_SPAN_MS)
+      ) {
+        return null;
+      }
+      const { from: zf, to: zt } = zoomSpanToRange(a.ts, b.ts);
+      const startMs = Math.min(a.ts, b.ts);
+      const endMs = Math.max(a.ts, b.ts);
+      // Commit the zoom (the fetch effect picks up the new fetchFrom/fetchTo and
+      // refetches in place). Skip a redundant set if we're already on that span.
+      setZoom((prev) => (prev && prev.from === zf && prev.to === zt ? prev : { from: zf, to: zt, startMs, endMs }));
+      return null;
+    });
+  }, [pointByLabel]);
+
   const resetZoom = useCallback(() => {
-    if (refetchTimerRef.current) {
-      clearTimeout(refetchTimerRef.current);
-      refetchTimerRef.current = null;
-    }
-    reconcileBrushRef.current = false;
+    setDrag(null);
     setZoom(null);
-    setBrush(null);
   }, []);
 
   // Subtitle: e.g. "Electric · kWh · 1h" (the global time window is shown in the
@@ -472,67 +425,74 @@ export function IntervalHistory({
         </div>
       ) : (
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="#1e293b" vertical={false} />
-              <XAxis
-                dataKey="label"
-                {...axisStyle}
-                minTickGap={40}
-                // Show a readable but not crowded set of tick labels.
-                // For dense ranges (30d at 1h = ~720 points) minTickGap prevents
-                // crowding; for sparse ranges (24h at 15m = ~96 points) it's fine.
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                {...axisStyle}
-                width={42}
-                tickFormatter={(v: number) => Number(v).toFixed(effectiveResolution === '15m' ? 2 : 1)}
-              />
-              <Tooltip
-                contentStyle={tooltipStyle}
-                formatter={(v: number | string) => [`${Number(v).toFixed(3)} ${unit}`, 'usage']}
-                labelFormatter={(l) => `${l}`}
-              />
-              {/* connectNulls={false} (the Recharts default) is load-bearing:
-                  missing intervals must render as line BREAKS, never as
-                  straight lines over a gap or fabricated zeros. We make it
-                  explicit here for clarity and to guard against future
-                  defaults changing. */}
-              <Line
-                type="monotone"
-                dataKey="value"
-                name="usage"
+          {/* Drag-to-select-zoom (issue #141): mouse-down records the start x,
+              mouse-move tracks it while dragging, mouse-up commits. onMouseLeave
+              cancels an in-progress drag (also a safe place to commit so a drag
+              that ends just off the plot still zooms). The cursor hints the
+              gesture is a selection (crosshair). No persistent handle exists, so
+              nothing can "snap back" the way the old Brush did. */}
+          <LineChart
+            data={data}
+            margin={{ top: 5, right: 10, left: 0, bottom: 0 }}
+            onMouseDown={onChartMouseDown}
+            onMouseMove={onChartMouseMove}
+            onMouseUp={commitDrag}
+            onMouseLeave={commitDrag}
+            style={{ cursor: 'crosshair', userSelect: 'none' }}
+          >
+            <CartesianGrid stroke="#1e293b" vertical={false} />
+            <XAxis
+              dataKey="label"
+              {...axisStyle}
+              minTickGap={40}
+              // Show a readable but not crowded set of tick labels.
+              // For dense ranges (30d at 1h = ~720 points) minTickGap prevents
+              // crowding; for sparse ranges (24h at 15m = ~96 points) it's fine.
+              interval="preserveStartEnd"
+            />
+            <YAxis
+              {...axisStyle}
+              width={42}
+              tickFormatter={(v: number) => Number(v).toFixed(effectiveResolution === '15m' ? 2 : 1)}
+            />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              formatter={(v: number | string) => [`${Number(v).toFixed(3)} ${unit}`, 'usage']}
+              labelFormatter={(l) => `${l}`}
+            />
+            {/* connectNulls={false} (the Recharts default) is load-bearing:
+                missing intervals must render as line BREAKS, never as
+                straight lines over a gap or fabricated zeros. We make it
+                explicit here for clarity and to guard against future
+                defaults changing. */}
+            <Line
+              type="monotone"
+              dataKey="value"
+              name="usage"
+              stroke={color}
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+            {/* The in-progress drag-selection band (issue #141). Drawn only while
+                a drag spans two distinct x positions; it disappears on mouse-up
+                (the zoom is committed and the data refetched for that span). */}
+            {drag && drag.refX2 != null && drag.refX2 !== drag.refX1 && (
+              <ReferenceArea
+                x1={drag.refX1}
+                x2={drag.refX2}
+                strokeOpacity={0.3}
                 stroke={color}
-                strokeWidth={1.5}
-                dot={false}
-                isAnimationActive={false}
-                connectNulls={false}
+                fill={color}
+                fillOpacity={0.12}
               />
-              {/* Brush (issue #141): the drag-to-zoom navigator. It is CONTROLLED
-                  — startIndex/endIndex come from `brush` state and are updated in
-                  onBrushChange — so dragging zooms the main chart smoothly with NO
-                  data change (this is the snap-back fix). A narrow settled span
-                  triggers a DEBOUNCED finer-detail refetch (shouldRefetchZoom)
-                  that swaps data in place without blanking the chart.
-                  `dataKey="label"` matches the XAxis.
-                  The `key` ties the brush's internal state to the current series
-                  length so a data swap re-seeds it cleanly with our indices. */}
-              <Brush
-                key={data.length}
-                dataKey="label"
-                height={18}
-                travellerWidth={8}
-                stroke="#475569"
-                fill="#0f172a"
-                startIndex={brush?.startIndex}
-                endIndex={brush?.endIndex}
-                onChange={onBrushChange}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-    );
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
 
   return (
     <ChartShell
